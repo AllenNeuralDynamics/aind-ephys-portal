@@ -4,7 +4,7 @@ import param
 import panel as pn
 import pandas as pd
 
-from aind_sigui_portal.docdb.database import get_all_ecephys_derived
+from aind_ephys_portal.docdb.database import get_all_ecephys_derived
 
 import boto3
 
@@ -76,6 +76,7 @@ class SearchOptions(param.Parameterized):
 
     def df_filtered(self):
         """Filter the options dataframe."""
+        print(f"Filtering records for: {self.text_filter}")
         if self.text_filter == "":
             return self.df
         
@@ -127,7 +128,7 @@ searchview = SearchView()
 text_input = pn.widgets.TextInput(
     name="Search",
     placeholder="Enter search terms...",
-    width=800
+    sizing_mode="stretch_width",
 )
 
 # Connect the search input to the search view

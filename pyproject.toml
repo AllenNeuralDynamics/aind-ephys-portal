@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aind-sigui-portal"
+name = "aind-ephys-portal"
 version = "0.1.0"
-description = "AIND SIGUI Portal - A Panel application for SIGUI data visualization"
+description = "AIND Ephys Portal - A Panel application for Ephys data visualization"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
@@ -18,7 +18,9 @@ dependencies = [
     "aind-data-access-api>=0.1.0",
     "pandas>=1.2.0",
     "numpy>=1.20.0",
-    "boto3"
+    "boto3",
+    "s3fs>=2025.2.0",
+    "zarr<3.0.0"
 ]
 
 [project.optional-dependencies]
@@ -31,14 +33,11 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/AllenNeuralDynamics/aind-sigui-portal"
-"Bug Tracker" = "https://github.com/AllenNeuralDynamics/aind-sigui-portal/issues"
+"Homepage" = "https://github.com/AllenNeuralDynamics/aind-ephys-portal"
+"Bug Tracker" = "https://github.com/AllenNeuralDynamics/aind-ephys-portal/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[project.scripts]
-aind-sigui-portal = "aind_sigui_portal.serve:serve"
