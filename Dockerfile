@@ -20,6 +20,13 @@ RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
 
 RUN apt install -y build-essential libglib2.0-0 libgl1 libegl1 libfontconfig1 libxkbcommon0 libdbus-1-3
 
+# Install wavpack
+ENV WAVPACK_VERSION=5.7.0
+RUN apt install -y wget
+RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
+    tar -xf wavpack-$WAVPACK_VERSION.tar.bz2 && cd wavpack-$WAVPACK_VERSION && \
+    ./configure && make install && cd ..
+
 # Install PySide6
 RUN pip install PySide6 wavpack-numcodecs
 
