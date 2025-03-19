@@ -18,5 +18,8 @@ RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     git checkout 77d7f5df66049d194553782702aaaae4352a332e && \
     pip install . --no-cache-dir && cd ..
 
+# Install PySide6
+RUN pip install --no-cache-dir PySide6
+
 EXPOSE 8000
 ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_gui_app.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --keep-alive 10000 --index ephys_portal_app.py"]
