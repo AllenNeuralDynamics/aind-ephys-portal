@@ -15,7 +15,7 @@ RUN pip install . --no-cache-dir
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout 730513b47209cb58e474bc0c9758eb34d32b54c5 && \
+    git checkout 77d7f5df66049d194553782702aaaae4352a332e && \
     pip install . --no-cache-dir && cd ..
 
 EXPOSE 8000
