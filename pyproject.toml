@@ -22,7 +22,7 @@ dependencies = [
     "boto3",
     "s3fs>=2025.2.0",
     "PySide6",
-    "spikeinterface-gui @ git+https://github.com/alejoe91/spikeinterface-gui.git@panel-views"
+    "spikeinterface-gui"
 ]
 
 [project.optional-dependencies]
