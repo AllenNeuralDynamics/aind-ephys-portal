@@ -23,7 +23,7 @@ jobs:
           # relative path to the place where source code with Dockerfile is located
           context: .
           push: true
-          tags: ghcr.io/allenneuraldynamics/aind-ephys-portal-dev:latest
+          tags: ghcr.io/allenneuraldynamics/aind-ephys-portal:dev
   update_ecs_service :
     runs-on: ubuntu-latest
     needs: publish_image
