@@ -9,7 +9,7 @@ import panel as pn
 from aind_data_access_api.document_db import MetadataDbClient
 
 # Constants for database connection
-API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", "api.allenneuraldynamics.org")
+API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", "api.allenneuraldynamics-test.org")
 DATABASE = os.environ.get("DATABASE", "metadata_index")
 COLLECTION = os.environ.get("COLLECTION", "data_assets")
 
