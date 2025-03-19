@@ -8,7 +8,7 @@ ADD setup.py .
 
 
 RUN apt-get update
-RUN apt install -y git
+RUN apt install -y git 
 RUN pip install --upgrade pip
 RUN pip install . --no-cache-dir
 
@@ -18,7 +18,7 @@ RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     git checkout 77d7f5df66049d194553782702aaaae4352a332e && \
     pip install . --no-cache-dir && cd ..
 
-RUN apt install -y libglib2.0-0 libgl1 libegl1 libfontconfig1 libxkbcommon0 libdbus-1-3
+RUN apt install -y build-essential libglib2.0-0 libgl1 libegl1 libfontconfig1 libxkbcommon0 libdbus-1-3
 
 # Install PySide6
 RUN pip install PySide6 wavpack-numcodecs
