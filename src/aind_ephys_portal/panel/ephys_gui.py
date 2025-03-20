@@ -11,6 +11,8 @@ import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 import panel as pn
 
+from .utils import Tee
+
 
 class EphysGuiView(param.Parameterized):
 
@@ -52,16 +54,12 @@ class EphysGuiView(param.Parameterized):
             # Create a TextArea widget to display logs
             log_output = pn.widgets.TextAreaInput(value='', sizing_mode="stretch_both")
 
-            class StdoutRedirector(io.StringIO):
-                def write(self, message):
-                    log_output.value += message  # Append new log messages
+            original_stdout = sys.stdout
+            sys.stdout = Tee(original_stdout, log_output)  # Redirect stdout
 
-            sys.stdout = StdoutRedirector()  # Redirect stdout
-            class StderrRedirector(io.StringIO):
-                def write(self, message):
-                    log_output.value += f"<span style='color:red;'>{message}</span>"  # Append new log messages in red
+            original_stderr = sys.stderr
+            sys.stderr = Tee(original_stderr, log_output)  # Redirect stderr
 
-            sys.stderr = StderrRedirector()  # Redirect stderr
             self.layout[1] = pn.Row(spinner, log_output)
 
             print(f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}")
@@ -126,7 +124,7 @@ class EphysGuiView(param.Parameterized):
         self._initialize()
 
     def on_click(self, event):
-        print("Launching!!!!!!!!!!!!!")
+        print("Launching SpikeInterface GUI!")
         self._initialize()
 
     def panel(self):

@@ -15,7 +15,7 @@ RUN pip install . --no-cache-dir
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout 77d7f5df66049d194553782702aaaae4352a332e && \
+    git checkout b12c3d9dd2d253a1fa53a60e087138d88a024e56 && \
     pip install . --no-cache-dir && cd ..
 
 RUN apt install -y build-essential libglib2.0-0 libgl1 libegl1 libfontconfig1 libxkbcommon0 libdbus-1-3
