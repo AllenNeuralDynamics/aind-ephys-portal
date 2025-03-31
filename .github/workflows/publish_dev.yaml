@@ -31,10 +31,10 @@ jobs:
       id-token: write
       contents: read
     env:
-      AWS_IAM_ROLE: ${{ secrets.AWS_IAM_ROLE_PROD }}
+      AWS_IAM_ROLE: ${{ secrets.AWS_IAM_ROLE_DEV }}
       AWS_REGION : ${{ vars.AWS_REGION }}
-      AWS_ECS_CLUSTER : ${{ vars.AWS_ECS_CLUSTER_PROD }}
-      AWS_ECS_SERVICE : ${{ vars.AWS_ECS_SERVICE_PROD }}
+      AWS_ECS_CLUSTER : ${{ vars.AWS_ECS_CLUSTER_DEV }}
+      AWS_ECS_SERVICE : ${{ vars.AWS_ECS_SERVICE_DEV }}
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python 3.10
