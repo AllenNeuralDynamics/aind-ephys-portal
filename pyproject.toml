@@ -13,7 +13,7 @@ authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
 dependencies = [
-    "panel>=1.0.0",
+    "panel>=1.0.0,<1.6.2",
     "param>=1.12.0",
     "aind-data-access-api>=0.1.0",
     "spikeinterface[full]>=0.102.0",

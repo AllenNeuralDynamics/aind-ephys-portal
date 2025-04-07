@@ -7,6 +7,9 @@ This file can be directly served using the Panel CLI:
 from aind_ephys_portal.panel.utils import format_css_background
 from aind_ephys_portal.panel.ephys_portal import EphysPortal
 
+import panel as pn
+
+pn.extension("tabulator", "gridstack", "react")
 
 format_css_background()
 

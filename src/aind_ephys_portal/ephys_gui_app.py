@@ -1,11 +1,12 @@
 """SIGUI View main entrypoint"""
 import urllib
-import panel as pn
 import param
 
 from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 
-pn.extension()
+import panel as pn
+
+pn.extension("tabulator", "gridstack", "react")
 
 
 # State sync
