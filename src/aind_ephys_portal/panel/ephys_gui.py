@@ -1,15 +1,16 @@
 import sys
-import io
 import param
 import boto3
 
+import panel as pn
+
+pn.extension("tabulator", "gridstack", "react")
 
 from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
 
-from spikeinterface_gui.backends.panel import PanelBackend
+from spikeinterface_gui import run_mainwindow
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
-import panel as pn
 
 from .utils import Tee
 
@@ -25,15 +26,13 @@ class EphysGuiView(param.Parameterized):
         self.recording_path = recording_path
         self.analyzer = None
 
-        self.backend = PanelBackend()
-        self.pn = self.backend.create_app()
-
         # Create initial layout
-        self.layout = self.pn.Column(
-            self.pn.Row(
-                self.pn.widgets.TextInput(name='Analyzer path', value=self.analyzer_path, height=50),
-                self.pn.widgets.TextInput(name='Recording path (optional)', value=self.recording_path, height=50),
-                self.pn.widgets.Button(name='Launch!', button_type='primary', height=50)
+        self.layout = pn.Column(
+            pn.Row(
+                pn.widgets.TextInput(name='Analyzer path', value=self.analyzer_path, height=50, sizing_mode="stretch_width"),
+                pn.widgets.TextInput(name='Recording path (optional)', value=self.recording_path, height=50, sizing_mode="stretch_width"),
+                pn.widgets.Button(name='Launch!', button_type='primary', height=50, sizing_mode="stretch_width"),
+                sizing_mode="stretch_width"
             ),
             self._create_main_window()
         )
@@ -69,6 +68,7 @@ class EphysGuiView(param.Parameterized):
                 self._set_processed_recording()
             self.win = self._create_main_window()
             self.layout[1] = self.win
+            print("Ephys GUI initialized successfully!")
             sys.stdout = sys.__stdout__  # Reset stdout
             sys.stderr = sys.__stderr__  # Reset stderr
 
@@ -97,6 +97,7 @@ class EphysGuiView(param.Parameterized):
         print(f"Processed recording loaded: {recording_processed}")
         self.analyzer.set_temporary_recording(recording_processed)
 
+
     def _check_if_s3_folder_exists(self, location):
         bucket_name = location.split("/")[2]
         prefix = "/".join(location.split("/")[3:])
@@ -109,12 +110,15 @@ class EphysGuiView(param.Parameterized):
 
     def _create_main_window(self):
         if self.analyzer is not None:
-            win = self.backend.create_main_window(
+            win = run_mainwindow(
                 analyzer=self.analyzer,
+                backend="panel",
+                start_app=False,
+                make_servable=False,
                 verbose=True,
                 curation=True
             )
-            return win.show()
+            return win.main_layout
         else:
             return pn.pane.Markdown("Analyzer not initialized")
 
