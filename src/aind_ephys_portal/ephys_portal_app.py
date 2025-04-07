@@ -9,7 +9,7 @@ from aind_ephys_portal.panel.ephys_portal import EphysPortal
 
 import panel as pn
 
-pn.extension("tabulator", "gridstack", "react")
+pn.extension("tabulator", "gridstack")
 
 format_css_background()
 

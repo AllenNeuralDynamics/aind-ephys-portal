@@ -4,7 +4,7 @@ import boto3
 
 import panel as pn
 
-pn.extension("tabulator", "gridstack", "react")
+pn.extension("tabulator", "gridstack")
 
 from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
 

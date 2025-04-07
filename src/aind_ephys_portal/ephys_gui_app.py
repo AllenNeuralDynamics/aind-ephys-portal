@@ -6,7 +6,7 @@ from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 
 import panel as pn
 
-pn.extension("tabulator", "gridstack", "react")
+pn.extension("tabulator", "gridstack")
 
 from spikeinterface_gui.utils_panel import KeyboardShortcuts
 
