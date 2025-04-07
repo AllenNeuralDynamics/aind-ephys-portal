@@ -8,6 +8,8 @@ import panel as pn
 
 pn.extension("tabulator", "gridstack", "react")
 
+from spikeinterface_gui.utils_panel import KeyboardShortcuts
+
 
 # State sync
 class Settings(param.Parameterized):
