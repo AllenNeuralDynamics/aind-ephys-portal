@@ -27,14 +27,18 @@ class SearchOptions(param.Parameterized):
             for record in self.all_records:
                 r = {
                     "name": record.get("name", ""),
-                    "subject_id": record.get("subject", {}).get("subject_id", ""),
                     "date": record.get("created", ""),
                     "id": record.get("_id", ""),
                     "location": record.get("location", ""),
                 }
+                subject = record.get("subject", {})
+                if subject:
+                    r["subject_id"] = subject.get("subject_id", "")
+                else:
+                    r["subject_id"] = record.get("subject_id", "")
                 data.append(r)
         except Exception as e:
-            print(f"Error loading initial data: {e}")
+            print(f"Error loading initial data: {e}.")
         
         # Create DataFrame
         self.df_full = pd.DataFrame(

@@ -1,10 +1,8 @@
 """Database access functions for the AIND SIGUI Portal."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
-import numpy as np
-import pandas as pd
 import panel as pn
 from aind_data_access_api.document_db import MetadataDbClient
 
