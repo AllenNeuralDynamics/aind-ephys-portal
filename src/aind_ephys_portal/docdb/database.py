@@ -1,15 +1,13 @@
 """Database access functions for the AIND SIGUI Portal."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
-import numpy as np
-import pandas as pd
 import panel as pn
 from aind_data_access_api.document_db import MetadataDbClient
 
 # Constants for database connection
-API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", "api.allenneuraldynamics-test.org")
+API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", "api.allenneuraldynamics.org")
 DATABASE = os.environ.get("DATABASE", "metadata_index")
 COLLECTION = os.environ.get("COLLECTION", "data_assets")
 
