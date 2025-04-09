@@ -55,7 +55,6 @@ def format_css_background():
     pn.config.raw_css.append(BACKGROUND_CSS)  # type: ignore
 
 
-
 class Tee(io.StringIO):
     def __init__(self, original_stdout, log_output):
         super().__init__()

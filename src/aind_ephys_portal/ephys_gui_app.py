@@ -1,4 +1,5 @@
 """SIGUI View main entrypoint"""
+
 import urllib
 import param
 

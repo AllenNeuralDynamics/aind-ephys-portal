@@ -29,29 +29,33 @@ class EphysGuiView(param.Parameterized):
         # Create initial layout
         self.layout = pn.Column(
             pn.Row(
-                pn.widgets.TextInput(name='Analyzer path', value=self.analyzer_path, height=50, sizing_mode="stretch_width"),
-                pn.widgets.TextInput(name='Recording path (optional)', value=self.recording_path, height=50, sizing_mode="stretch_width"),
-                pn.widgets.Button(name='Launch!', button_type='primary', height=50, sizing_mode="stretch_width"),
-                sizing_mode="stretch_width"
+                pn.widgets.TextInput(
+                    name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
+                ),
+                pn.widgets.TextInput(
+                    name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
+                ),
+                pn.widgets.Button(name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"),
+                sizing_mode="stretch_width",
             ),
-            self._create_main_window()
+            self._create_main_window(),
         )
 
         # Store widget references
         self.analyzer_input = self.layout[0][0]
         self.recording_input = self.layout[0][1]
         self.launch_button = self.layout[0][2]
-        
+
         # Setup event handlers
-        self.analyzer_input.param.watch(self.update_values, 'value')
-        self.recording_input.param.watch(self.update_values, 'value')
+        self.analyzer_input.param.watch(self.update_values, "value")
+        self.recording_input.param.watch(self.update_values, "value")
         self.launch_button.on_click(self.on_click)
 
     def _initialize(self):
         if self.analyzer_input.value != "":
             spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
             # Create a TextArea widget to display logs
-            log_output = pn.widgets.TextAreaInput(value='', sizing_mode="stretch_both")
+            log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
 
             original_stdout = sys.stdout
             sys.stdout = Tee(original_stdout, log_output)  # Redirect stdout
@@ -61,7 +65,9 @@ class EphysGuiView(param.Parameterized):
 
             self.layout[1] = pn.Row(spinner, log_output)
 
-            print(f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}")
+            print(
+                f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
+            )
 
             self._initialize_analyzer()
             if self.recording_path != "":
@@ -97,14 +103,13 @@ class EphysGuiView(param.Parameterized):
         print(f"Processed recording loaded: {recording_processed}")
         self.analyzer.set_temporary_recording(recording_processed)
 
-
     def _check_if_s3_folder_exists(self, location):
         bucket_name = location.split("/")[2]
         prefix = "/".join(location.split("/")[3:])
         try:
-            s3 = boto3.client('s3')
+            s3 = boto3.client("s3")
             response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
-            return 'Contents' in response
+            return "Contents" in response
         except Exception as e:
             return False
 
