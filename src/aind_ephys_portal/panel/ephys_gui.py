@@ -112,11 +112,12 @@ class EphysGuiView(param.Parameterized):
         if self.analyzer is not None:
             win = run_mainwindow(
                 analyzer=self.analyzer,
+                curation=True,
+                skip_extensions=["waveforms"],
                 backend="panel",
                 start_app=False,
                 make_servable=False,
                 verbose=True,
-                curation=True
             )
             return win.main_layout
         else:
