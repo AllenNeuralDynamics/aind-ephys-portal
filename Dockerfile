@@ -9,8 +9,8 @@ ADD setup.py .
 
 RUN apt-get update
 RUN apt install -y git build-essential nodejs npm
-RUN pip install --upgrade pip
-RUN pip install . --no-cache-dir
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install .
 
 # Install wavpack
 ENV WAVPACK_VERSION=5.7.0
@@ -26,7 +26,7 @@ RUN pip install wavpack-numcodecs
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
     git checkout f8198db0ac04232f594dcb1bef80c446e41cd775 && \
-    pip install . --no-cache-dir && cd ..
+    pip install . && cd ..
 
 
 EXPOSE 8000
