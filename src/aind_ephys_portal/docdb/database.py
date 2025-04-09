@@ -1,10 +1,8 @@
 """Database access functions for the AIND SIGUI Portal."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
-import numpy as np
-import pandas as pd
 import panel as pn
 from aind_data_access_api.document_db import MetadataDbClient
 
@@ -81,6 +79,7 @@ def get_asset_by_name(asset_name: str):
     response = client.retrieve_docdb_records(filter_query={"name": {"$regex": asset_name, "$options": "i"}}, limit=0)
     return response
 
+
 @pn.cache(ttl=TIMEOUT_1H)
 def get_raw_asset_by_name(asset_name: str):
     """Get all assets that match a given asset name pattern.
@@ -96,22 +95,22 @@ def get_raw_asset_by_name(asset_name: str):
         List of matching asset records.
     """
     raw_name = _raw_name_from_derived(asset_name)
-    response = client.retrieve_docdb_records(filter_query={"name": {"$regex": raw_name, "$options": "i"},
-                                                           "data_description.data_level": "raw"}, limit=0)
+    response = client.retrieve_docdb_records(
+        filter_query={"name": {"$regex": raw_name, "$options": "i"}, "data_description.data_level": "raw"}, limit=0
+    )
     return response
 
 
 @pn.cache(ttl=TIMEOUT_1H)
 def get_all_ecephys_derived() -> List[Dict[str, Any]]:
     """Get a limited set of all records from the database.
-    
+
     Returns
     -------
     list[dict]
         List of records, limited to 50 entries.
     """
-    filter_query = {"data_description.modality.abbreviation": "ecephys", 
-                    "data_description.data_level": "derived"}
+    filter_query = {"data_description.modality.abbreviation": "ecephys", "data_description.data_level": "derived"}
     response = client.retrieve_docdb_records(
         filter_query=filter_query,
     )
