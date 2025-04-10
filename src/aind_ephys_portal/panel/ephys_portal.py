@@ -68,7 +68,9 @@ class EphysPortal:
         self.results_panel.on_click(self.update_streams)
 
         # Start the auto-update process
-        self.auto_update_datasets()
+        # TODO: debug
+        # self.auto_update_datasets()
+
         # Initialize with current results
         self.update_results(None)
 
@@ -129,14 +131,14 @@ class EphysPortal:
         streams_df = pd.DataFrame({"Stream name": [no_streams_text], "Ephys GUI View": [""]})
         self.streams_panel.value = streams_df
 
-    def auto_update_datasets(self):
-        # Update the search options
-        print(f"Updating datasets. Current number of ecephys processed assets: {len(self.search_options.df)}")
-        self.search_options.update_options()
-        print(f"Updated datasets. New number of ecephys processed assets: {len(self.search_options.df)}")
+    # def auto_update_datasets(self):
+    #     # Update the search options
+    #     print(f"Updating datasets. Current number of ecephys processed assets: {len(self.search_options.df)}")
+    #     self.search_options.update_options()
+    #     print(f"Updated datasets. New number of ecephys processed assets: {len(self.search_options.df)}")
 
-        # Schedule next run in 1 hour (3600 seconds)
-        threading.Timer(3600, self.auto_update_datasets).start()
+    #     # Schedule next run in 1 hour (3600 seconds)
+    #     threading.Timer(3600, self.auto_update_datasets).start()
 
     def panel(self):
         """Build a Panel object representing the Ephys Portal."""
