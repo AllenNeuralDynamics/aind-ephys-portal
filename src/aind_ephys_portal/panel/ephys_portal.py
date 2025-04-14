@@ -113,7 +113,9 @@ class EphysPortal:
                 links_url = []
                 for stream_name in stream_names:
                     raw_stream_name = stream_name[: stream_name.find("_recording")]
-                    recording_path = f"{raw_asset['location']}/ecephys/ecephys_compressed/{raw_stream_name}.zarr"
+                    raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
+                    print(f"Raw asset prefix: {raw_asset_prefix}")
+                    recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
                     print("Raw path:", recording_path)
                     print("Analyzer path:", analyzer_path)
@@ -139,6 +141,23 @@ class EphysPortal:
 
     #     # Schedule next run in 1 hour (3600 seconds)
     #     threading.Timer(3600, self.auto_update_datasets).start()
+
+    def get_raw_asset_location(self, asset_location):
+        asset_without_s3 = asset_location[asset_location.find("s3://") + 5:]
+        asset_split = asset_without_s3.split("/")
+        bucket_name = asset_split[0]
+        session_name = "/".join(asset_split[1:])
+        possible_locations = ["ecephys/ecephye_compressed", "ecephys_compressed"]
+        raw_asset_location = None
+        for location in possible_locations:
+            prefix = f"{session_name}/{location}/"
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
+            if "Contents" in response:
+                raw_asset_location = f"s3://{bucket_name}/{prefix}"
+                break
+        if raw_asset_location is not None and raw_asset_location.endswith("/"):
+            raw_asset_location = raw_asset_location[:-1]
+        return raw_asset_location
 
     def panel(self):
         """Build a Panel object representing the Ephys Portal."""

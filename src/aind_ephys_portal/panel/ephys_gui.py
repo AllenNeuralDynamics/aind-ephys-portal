@@ -1,6 +1,8 @@
 import sys
 import param
 import boto3
+import time
+from copy import deepcopy
 
 import panel as pn
 
@@ -14,6 +16,19 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 
 from .utils import Tee
 
+
+displayed_unit_properties = ["decoder_label", "firing_rate", "y", "snr", "amplitude_median", "isi_violation_ratio"]
+default_curation_dict = {
+    "label_definitions": {
+        "quality":{
+            "label_options": ["good", "noise", "MUA", "artifact"],
+            "exclusive": True,
+        }, 
+    },
+    "manual_labels": [],
+    "merge_unit_groups": [],
+    "removed_units": [],
+}
 
 class EphysGuiView(param.Parameterized):
 
@@ -53,6 +68,7 @@ class EphysGuiView(param.Parameterized):
 
     def _initialize(self):
         if self.analyzer_input.value != "":
+            t_start = time.perf_counter()
             spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
             # Create a TextArea widget to display logs
             log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
@@ -75,6 +91,8 @@ class EphysGuiView(param.Parameterized):
             self.win = self._create_main_window()
             self.layout[1] = self.win
             print("Ephys GUI initialized successfully!")
+            t_stop = time.perf_counter()
+            print(f"Initialization time: {t_stop - t_start:.2f} seconds")
             sys.stdout = sys.__stdout__  # Reset stdout
             sys.stderr = sys.__stderr__  # Reset stderr
 
@@ -115,10 +133,22 @@ class EphysGuiView(param.Parameterized):
 
     def _create_main_window(self):
         if self.analyzer is not None:
+            # prepare the curation data using decoder labels
+            curation_dict = deepcopy(default_curation_dict)
+            curation_dict["unit_ids"] = self.analyzer.unit_ids
+            if "decoder_label" in self.analyzer.sorting.get_property_keys():
+                decoder_labels = self.analyzer.get_sorting_property("decoder_label")
+                noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
+                curation_dict["removed_units"] = list(noise_units)
+                for unit_id in noise_units:
+                    curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
+
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
                 skip_extensions=["waveforms"],
+                displayed_unit_properties=displayed_unit_properties,
+                curation_dict=curation_dict,
                 backend="panel",
                 start_app=False,
                 make_servable=False,
