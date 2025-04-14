@@ -147,7 +147,7 @@ class EphysPortal:
         asset_split = asset_without_s3.split("/")
         bucket_name = asset_split[0]
         session_name = "/".join(asset_split[1:])
-        possible_locations = ["ecephys/ecephye_compressed", "ecephys_compressed"]
+        possible_locations = ["ecephys/ecephys_compressed", "ecephys_compressed"]
         raw_asset_location = None
         for location in possible_locations:
             prefix = f"{session_name}/{location}/"
