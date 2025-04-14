@@ -21,7 +21,7 @@ displayed_unit_properties = ["decoder_label", "firing_rate", "y", "snr", "amplit
 default_curation_dict = {
     "label_definitions": {
         "quality":{
-            "label_options": ["good", "noise", "MUA", "artifact"],
+            "label_options": ["good", "MUA", "noise"],
             "exclusive": True,
         }, 
     },
