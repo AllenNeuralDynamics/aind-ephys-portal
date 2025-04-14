@@ -151,7 +151,11 @@ class EphysPortal:
         raw_asset_location = None
         for location in possible_locations:
             prefix = f"{session_name}/{location}/"
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
+            try:
+                response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
+            except Exception as e:
+                print(f"Error listing objects from {bucket_name}/{prefix}: {e}")
+                continue
             if "Contents" in response:
                 raw_asset_location = f"s3://{bucket_name}/{prefix}"
                 break
