@@ -12,7 +12,6 @@ from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecep
 from aind_ephys_portal.panel.utils import format_link, OUTER_STYLE, EPHYSGUI_LINK_PREFIX
 
 s3_client = boto3.client("s3")
-s3_unsigned_client = boto3.client('s3', config=Config(signature_version=UNSIGNED))
 
 
 class EphysPortal:
@@ -160,13 +159,8 @@ class EphysPortal:
             try:
                 response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
             except Exception as e:
-                # Try with unsigned client
-                print(f"Error listing objects from {bucket_name}/{prefix}: {e}\nTrying with unsigned client...")
-                try:
-                    response = s3_unsigned_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
-                except Exception as e:
-                    print(f"Error listing objects with unsigned client from {bucket_name}/{prefix}: {e}")
-                    continue
+                print(f"Error listing objects with unsigned client from {bucket_name}/{prefix}: {e}")
+                continue
             if "Contents" in response:
                 raw_asset_location = f"s3://{bucket_name}/{prefix}"
                 break
