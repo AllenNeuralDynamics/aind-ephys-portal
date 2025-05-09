@@ -25,7 +25,7 @@ RUN pip install wavpack-numcodecs
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/SpikeInterface/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout e7c37434169df1ad107acdc2b7a6b4d3fd18821a && \
+    git checkout 9a73086fa146924b24e519aecef2aaddf3789b71 && \
     pip install . && cd ..
 
 
