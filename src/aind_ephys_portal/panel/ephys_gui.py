@@ -30,6 +30,21 @@ default_curation_dict = {
     "removed_units": [],
 }
 
+from spikeinterface_gui.layout_presets import _presets
+
+aind_layout = dict(
+    zone1=['unitlist', 'curation', 'mergelist', 'spikelist'],
+    zone2=[],
+    zone3=['trace', 'tracemap',  'spikeamplitude'],
+    zone4=[],
+    zone5=['probe'],
+    zone6=['ndscatter', 'similarity'],
+    zone7=['waveform', 'waveformheatmap', ],
+    zone8=['correlogram', 'isi'],
+)
+_presets['aind'] = aind_layout
+
+
 class EphysGuiView(param.Parameterized):
 
     def __init__(self, analyzer_path, recording_path, **params):
@@ -153,6 +168,7 @@ class EphysGuiView(param.Parameterized):
                 start_app=False,
                 make_servable=False,
                 verbose=True,
+                layout_preset="aind"
             )
             return win.main_layout
         else:
