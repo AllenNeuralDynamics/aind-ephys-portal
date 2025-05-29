@@ -35,7 +35,7 @@ from spikeinterface_gui.layout_presets import _presets
 aind_layout = dict(
     zone1=['unitlist', 'curation', 'mergelist', 'spikelist'],
     zone2=[],
-    zone3=['spikeamplitude', 'trace', 'tracemap'],
+    zone3=['spikeamplitude', 'spikedepth', 'trace', 'tracemap'],
     zone4=[],
     zone5=['probe'],
     zone6=['ndscatter', 'similarity'],
@@ -164,7 +164,7 @@ class EphysGuiView(param.Parameterized):
                 skip_extensions=["waveforms"],
                 displayed_unit_properties=displayed_unit_properties,
                 curation_dict=curation_dict,
-                backend="panel",
+                mode="web",
                 start_app=False,
                 make_servable=False,
                 verbose=True,
