@@ -11,6 +11,8 @@ pn.extension("tabulator", "gridstack")
 from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
 
 from spikeinterface_gui import run_mainwindow
+from spikeinterface_gui.launcher import instantiate_analyzer_and_recording
+
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 
@@ -19,6 +21,7 @@ from .utils import Tee
 
 displayed_unit_properties = ["decoder_label", "default_qc", "firing_rate", "y", "snr", "amplitude_median", "isi_violation_ratio"]
 default_curation_dict = {
+    "format_version": "2",
     "label_definitions": {
         "quality":{
             "label_options": ["good", "MUA", "noise"],
@@ -26,23 +29,23 @@ default_curation_dict = {
         }, 
     },
     "manual_labels": [],
-    "merge_unit_groups": [],
-    "removed_units": [],
+    "removed": [],
+    "merges": [],
+    "splits": [],
 }
 
-from spikeinterface_gui.layout_presets import _presets
 
+# Define the layout for the AIND Ephys GUI
 aind_layout = dict(
     zone1=['unitlist', 'curation', 'mergelist', 'spikelist'],
     zone2=[],
-    zone3=['spikeamplitude', 'trace', 'tracemap'],
+    zone3=['spikeamplitude', 'spikedepth', 'trace', 'tracemap'],
     zone4=[],
     zone5=['probe'],
     zone6=['ndscatter', 'similarity'],
     zone7=['waveform'],
     zone8=['correlogram'],
 )
-_presets['aind'] = aind_layout
 
 
 class EphysGuiView(param.Parameterized):
@@ -100,8 +103,8 @@ class EphysGuiView(param.Parameterized):
                 f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
             )
 
-            self._initialize_analyzer()
-            if self.recording_path != "":
+            self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+            if self.recording_path and self.recording_path != "" and not self.analyzer.has_recording():
                 self._set_processed_recording()
             self.win = self._create_main_window()
             self.layout[1] = self.win
@@ -136,16 +139,6 @@ class EphysGuiView(param.Parameterized):
         print(f"Processed recording loaded: {recording_processed}")
         self.analyzer.set_temporary_recording(recording_processed)
 
-    def _check_if_s3_folder_exists(self, location):
-        bucket_name = location.split("/")[2]
-        prefix = "/".join(location.split("/")[3:])
-        try:
-            s3 = boto3.client("s3")
-            response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
-            return "Contents" in response
-        except Exception as e:
-            return False
-
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
@@ -154,7 +147,7 @@ class EphysGuiView(param.Parameterized):
             if "decoder_label" in self.analyzer.sorting.get_property_keys():
                 decoder_labels = self.analyzer.get_sorting_property("decoder_label")
                 noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
-                curation_dict["removed_units"] = list(noise_units)
+                curation_dict["removed"] = list(noise_units)
                 for unit_id in noise_units:
                     curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
 
@@ -164,11 +157,11 @@ class EphysGuiView(param.Parameterized):
                 skip_extensions=["waveforms"],
                 displayed_unit_properties=displayed_unit_properties,
                 curation_dict=curation_dict,
-                backend="panel",
+                mode="web",
                 start_app=False,
-                make_servable=False,
                 verbose=True,
-                layout_preset="aind"
+                layout=aind_layout,
+                panel_window_servable=False
             )
             return win.main_layout
         else:
