@@ -124,7 +124,7 @@ class EphysPortal:
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
                     print("Raw path:", recording_path)
                     print("Analyzer path:", analyzer_path)
-                    link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path).replace("#", "%23")
+                    link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
                     links_url.append(link_url)
                 links = [format_link(link) for link in links_url]
 

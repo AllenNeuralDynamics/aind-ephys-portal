@@ -1,7 +1,7 @@
 import panel as pn
 import io
 
-EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}"
+EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}&launch={}"
 
 
 AIND_COLORS = colors = {

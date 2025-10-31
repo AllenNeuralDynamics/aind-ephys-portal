@@ -2,6 +2,7 @@ import sys
 import param
 import boto3
 import time
+from contextlib import contextmanager
 from copy import deepcopy
 
 import panel as pn
@@ -10,7 +11,6 @@ pn.extension("tabulator", "gridstack")
 
 from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
 
-from spikeinterface_gui import run_mainwindow
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 
@@ -30,8 +30,6 @@ default_curation_dict = {
     "removed_units": [],
 }
 
-from spikeinterface_gui.layout_presets import _presets
-
 aind_layout = dict(
     zone1=['unitlist', 'curation', 'mergelist', 'spikelist'],
     zone2=[],
@@ -39,15 +37,14 @@ aind_layout = dict(
     zone4=[],
     zone5=['probe'],
     zone6=['ndscatter', 'similarity'],
-    zone7=['waveform'],
-    zone8=['correlogram'],
+    zone7=['waveform', 'waveformheatmap'],
+    zone8=['correlogram', 'metrics', 'mainsettings'],
 )
-_presets['aind'] = aind_layout
 
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, **params):
+    def __init__(self, analyzer_path, recording_path, launch=False, **params):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -79,27 +76,56 @@ class EphysGuiView(param.Parameterized):
         # Setup event handlers
         self.analyzer_input.param.watch(self.update_values, "value")
         self.recording_input.param.watch(self.update_values, "value")
-        self.launch_button.on_click(self.on_click)
+        if launch:
+            # Schedule initialization to run after UI is rendered
+            def delayed_init():
+                self._initialize()
+                return False  # Don't repeat the callback
+            
+            # Add a short delay to let the UI render
+            pn.state.add_periodic_callback(delayed_init, period=200, count=1)
+        else:
+            self.launch_button.on_click(self.on_click)
+
+
+    # @contextmanager
+    # def loading_context(self):
+    #     """Context manager for loading operations with optional UI display"""
+    #     # Show loading UI
+    #     spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
+    #     log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
+    #     self.layout[1] = pn.Row(spinner, log_output)
+        
+    #     # Redirect stdout/stderr
+    #     original_stdout = sys.stdout
+    #     original_stderr = sys.stderr
+    #     sys.stdout = Tee(original_stdout, log_output)
+    #     sys.stderr = Tee(original_stderr, log_output)
+        
+    #     try:
+    #         yield
+    #     finally:
+    #         # Reset stdout/stderr
+    #         sys.stdout = original_stdout
+    #         sys.stderr = original_stderr
+
 
     def _initialize(self):
         if self.analyzer_input.value != "":
-            t_start = time.perf_counter()
+            # Show loading UI
             spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
-            # Create a TextArea widget to display logs
             log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-
-            original_stdout = sys.stdout
-            sys.stdout = Tee(original_stdout, log_output)  # Redirect stdout
-
-            original_stderr = sys.stderr
-            sys.stderr = Tee(original_stderr, log_output)  # Redirect stderr
-
             self.layout[1] = pn.Row(spinner, log_output)
-
+            
+            # Redirect stdout/stderr
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = Tee(original_stdout, log_output)
+            sys.stderr = Tee(original_stderr, log_output)
+            t_start = time.perf_counter()
             print(
                 f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
             )
-
             self._initialize_analyzer()
             if self.recording_path != "":
                 self._set_processed_recording()
@@ -108,8 +134,8 @@ class EphysGuiView(param.Parameterized):
             print("Ephys GUI initialized successfully!")
             t_stop = time.perf_counter()
             print(f"Initialization time: {t_stop - t_start:.2f} seconds")
-            sys.stdout = sys.__stdout__  # Reset stdout
-            sys.stderr = sys.__stderr__  # Reset stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
@@ -148,6 +174,8 @@ class EphysGuiView(param.Parameterized):
 
     def _create_main_window(self):
         if self.analyzer is not None:
+            from spikeinterface_gui import run_mainwindow
+
             # prepare the curation data using decoder labels
             curation_dict = deepcopy(default_curation_dict)
             curation_dict["unit_ids"] = self.analyzer.unit_ids
@@ -161,14 +189,13 @@ class EphysGuiView(param.Parameterized):
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
-                skip_extensions=["waveforms"],
                 displayed_unit_properties=displayed_unit_properties,
                 curation_dict=curation_dict,
                 mode="web",
                 start_app=False,
-                make_servable=False,
                 verbose=True,
-                layout_preset="aind"
+                layout=aind_layout,
+                disable_save_settings_button=True
             )
             return win.main_layout
         else:
@@ -180,6 +207,7 @@ class EphysGuiView(param.Parameterized):
         self._initialize()
 
     def on_click(self, event):
+        # with self.loading_context():
         print("Launching SpikeInterface GUI!")
         self._initialize()
 
