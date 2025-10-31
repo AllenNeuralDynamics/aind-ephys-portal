@@ -41,7 +41,7 @@ aind_layout = dict(
     zone8=['correlogram', 'metrics', 'mainsettings'],
 )
 
-
+# TODO: launch automatically if analyzer_path is set and remove launch button
 class EphysGuiView(param.Parameterized):
 
     def __init__(self, analyzer_path, recording_path, launch=False, **params):
