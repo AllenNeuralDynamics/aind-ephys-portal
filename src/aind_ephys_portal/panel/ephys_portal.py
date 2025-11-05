@@ -4,8 +4,6 @@ import param
 import panel as pn
 import pandas as pd
 import boto3
-from botocore import UNSIGNED
-from botocore.config import Config
 
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
@@ -118,13 +116,16 @@ class EphysPortal:
                     raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
                     print(f"Raw asset prefix: {raw_asset_prefix}")
                     if raw_asset_prefix is None:
-                        recording_path=""
+                        recording_path = ""
                     else:
                         recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
                     print("Raw path:", recording_path)
                     print("Analyzer path:", analyzer_path)
-                    link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
+                    if not analyzer_path.endswith(".zarr"):
+                        link_url = "Only Zarr files are supported."
+                    else:
+                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
                     links_url.append(link_url)
                 links = [format_link(link) for link in links_url]
 
@@ -148,7 +149,7 @@ class EphysPortal:
     #     threading.Timer(3600, self.auto_update_datasets).start()
 
     def get_raw_asset_location(self, asset_location):
-        asset_without_s3 = asset_location[asset_location.find("s3://") + 5:]
+        asset_without_s3 = asset_location[asset_location.find("s3://") + 5 :]
         asset_split = asset_without_s3.split("/")
         bucket_name = asset_split[0]
         session_name = "/".join(asset_split[1:])

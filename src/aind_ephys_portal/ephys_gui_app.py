@@ -4,6 +4,7 @@ import urllib
 import param
 
 from aind_ephys_portal.panel.ephys_gui import EphysGuiView
+from aind_ephys_portal.monitor import monitor
 
 import panel as pn
 
@@ -22,14 +23,18 @@ class Settings(param.Parameterized):
 
 
 settings = Settings()
-pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "launch": "launch"})
+pn.state.location.sync(
+    settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "launch": "launch"}
+)
 
 # Manually decode stream_name after syncing
 settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
 settings.recording_path = urllib.parse.unquote(settings.recording_path)
-launch = settings.launch
 
-ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, launch=launch)
-ephys_gui_panel = ephys_gui.panel()
+ephys_gui = EphysGuiView(
+    analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, launch=settings.launch
+)
 
-ephys_gui_panel.servable(title="AIND Ephys GUI")
+app_layout = pn.Column(monitor, ephys_gui.layout, sizing_mode="stretch_width")
+
+app_layout.servable(title="AIND Ephys GUI")
