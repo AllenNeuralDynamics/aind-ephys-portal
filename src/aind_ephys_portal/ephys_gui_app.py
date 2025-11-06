@@ -34,7 +34,6 @@ settings.recording_path = urllib.parse.unquote(settings.recording_path)
 ephys_gui = EphysGuiView(
     analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, launch=settings.launch
 )
-
 app_layout = pn.Column(monitor, ephys_gui.layout, sizing_mode="stretch_width")
 
 app_layout.servable(title="AIND Ephys GUI")

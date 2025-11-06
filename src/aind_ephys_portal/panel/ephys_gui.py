@@ -88,6 +88,7 @@ class EphysGuiView(param.Parameterized):
         # Setup event handlers
         self.analyzer_input.param.watch(self.update_values, "value")
         self.recording_input.param.watch(self.update_values, "value")
+        self.launch_button.on_click(self.on_click)
         if self.launch and self.analyzer_path != "":
             # # # Schedule initialization to run after UI is rendered
             # def delayed_init():
@@ -99,8 +100,6 @@ class EphysGuiView(param.Parameterized):
             # # self._initialize()
             # pn.state.execute(self._initialize_async)
             self._initialize()
-        else:
-            self.launch_button.on_click(self.on_click)
 
     def _initialize(self):
         # Show loading UI
@@ -121,18 +120,16 @@ class EphysGuiView(param.Parameterized):
         if self.recording_path != "":
             self._set_processed_recording()
         self.win = self._create_main_window()
-        # Force Panel to update by using objects indexing
-        print("Ephys GUI initialized successfully!")
-        t_stop = time.perf_counter()
-        print(f"Initialization time: {t_stop - t_start:.2f} seconds")
-        # Then update layout - schedule it separately to ensure it renders
-        print("Updating GUI layout...")
 
-        self.layout[1] = self.win
-
-        # Restore stdout/stderr
+        # # Restore stdout/stderr
         sys.stdout = original_stdout
         sys.stderr = original_stderr
+
+        if self.win is not None:
+            self.layout[1] = self.win
+
+        t_stop = time.perf_counter()
+        print(f"Ephys GUI initialized in time: {t_stop - t_start:.2f} seconds")
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
@@ -201,6 +198,7 @@ class EphysGuiView(param.Parameterized):
                 start_app=False,
                 panel_window_servable=False,
             )
+
             # Ensure the layout is not marked as servable
             main_layout = win.main_layout
             return main_layout
@@ -210,12 +208,13 @@ class EphysGuiView(param.Parameterized):
     def update_values(self, event):
         self.analyzer_path = self.analyzer_input.value
         self.recording_path = self.recording_input.value
-        self._initialize()
+        # self._initialize()
 
     def on_click(self, event):
         # with self.loading_context():
         print("Launching SpikeInterface GUI!")
-        self._initialize()
+        # self._initialize()
+        pn.state.execute(self._initialize)
 
     def panel(self):
         """Return the panel layout"""

@@ -28,7 +28,7 @@ To run the Ephys Portal:
 
 ```bash
 # Run using Panel CLI (recommended for server deployment)
-panel serve src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_gui_app.py --static-dirs images=src/aind_ephys_portal/images --autoreload
+panel serve src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_gui_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images 
 ```
 
 This will start a Panel server and make the application available in your web browser.

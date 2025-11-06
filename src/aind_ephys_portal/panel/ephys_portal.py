@@ -120,14 +120,17 @@ class EphysPortal:
                     else:
                         recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
-                    print("Raw path:", recording_path)
-                    print("Analyzer path:", analyzer_path)
                     if not analyzer_path.endswith(".zarr"):
                         link_url = "Only Zarr files are supported."
                     else:
                         link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
                     links_url.append(link_url)
-                links = [format_link(link) for link in links_url]
+                links = []
+                for link in links_url:
+                    if "ephys_gui_app" in link:
+                        links.append(format_link(link, text="SpikeInterface-GUI"))
+                    else:
+                        links.append(link)
 
                 # Update the streams panel
                 streams_df = pd.DataFrame({"Stream name": stream_names, "Ephys GUI View": links})

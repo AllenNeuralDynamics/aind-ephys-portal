@@ -22,7 +22,8 @@ dependencies = [
     "boto3",
     "s3fs>=2025.2.0",
     "numcodecs<0.16.0",
-    "spikeinterface-gui"
+    "spikeinterface-gui",
+    "psutil"
 ]
 
 [project.optional-dependencies]
