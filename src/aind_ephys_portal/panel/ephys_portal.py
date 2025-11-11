@@ -4,8 +4,6 @@ import param
 import panel as pn
 import pandas as pd
 import boto3
-from botocore import UNSIGNED
-from botocore.config import Config
 
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
@@ -69,17 +67,21 @@ class EphysPortal:
         # Update the streams panel when a row is selected
         self.results_panel.on_click(self.update_streams)
 
-        # Start the auto-update process
-        # TODO: debug
-        # self.auto_update_datasets()
-
+        self.refresh_button = pn.widgets.Button(
+            name="Refresh Datasets", button_type="primary", height=30, width=150
+        )
+        self.refresh_button.on_click(self.update_results)
         # Initialize with current results
         self.update_results(None)
 
     def update_results(self, event):
         """Update the results panel with the current search results."""
         print("Updating search results...")
+        print(event)
         if event is None:
+            df = self.search_options.df
+        elif event.name == "clicks":
+            self.search_options.update_options()
             df = self.search_options.df
         else:
             # Filter the DataFrame based on the search input
@@ -122,11 +124,17 @@ class EphysPortal:
                     else:
                         recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
-                    print("Raw path:", recording_path)
-                    print("Analyzer path:", analyzer_path)
-                    link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path).replace("#", "%23")
+                    if not analyzer_path.endswith(".zarr"):
+                        link_url = "Only Zarr files are supported."
+                    else:
+                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
                     links_url.append(link_url)
-                links = [format_link(link) for link in links_url]
+                links = []
+                for link in links_url:
+                    if "ephys_gui_app" in link:
+                        links.append(format_link(link, text="SpikeInterface-GUI"))
+                    else:
+                        links.append(link)
 
                 # Update the streams panel
                 streams_df = pd.DataFrame({"Stream name": stream_names, "Ephys GUI View": links})
@@ -137,15 +145,6 @@ class EphysPortal:
         no_streams_text = f"No postprocessed streams..."
         streams_df = pd.DataFrame({"Stream name": [no_streams_text], "Ephys GUI View": [""]})
         self.streams_panel.value = streams_df
-
-    # def auto_update_datasets(self):
-    #     # Update the search options
-    #     print(f"Updating datasets. Current number of ecephys processed assets: {len(self.search_options.df)}")
-    #     self.search_options.update_options()
-    #     print(f"Updated datasets. New number of ecephys processed assets: {len(self.search_options.df)}")
-
-    #     # Schedule next run in 1 hour (3600 seconds)
-    #     threading.Timer(3600, self.auto_update_datasets).start()
 
     def get_raw_asset_location(self, asset_location):
         asset_without_s3 = asset_location[asset_location.find("s3://") + 5:]
@@ -174,7 +173,7 @@ class EphysPortal:
         # and streams panel at the bottom
         col = pn.Column(
             pn.pane.Markdown("# AIND Ephys Portal", styles={"text-align": "center"}),
-            pn.Row(self.search_bar, align="center"),
+            pn.Row(self.search_bar, self.refresh_button, align="center"),
             pn.layout.Divider(),
             pn.pane.Markdown("## Search Results", styles={"text-align": "left"}),
             self.results_panel,

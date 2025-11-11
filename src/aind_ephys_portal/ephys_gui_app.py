@@ -4,6 +4,7 @@ import urllib
 import param
 
 from aind_ephys_portal.panel.ephys_gui import EphysGuiView
+from aind_ephys_portal.monitor import monitor
 
 import panel as pn
 
@@ -29,6 +30,7 @@ settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
 
 ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path)
-ephys_gui_panel = ephys_gui.panel()
+ephys_gui.layout.sizing_mode = "stretch_both"
+app_layout = pn.Column(monitor, ephys_gui.layout, sizing_mode="stretch_both", min_height=600)
 
-ephys_gui_panel.servable(title="AIND Ephys GUI")
+app_layout.servable(title="AIND Ephys GUI")
