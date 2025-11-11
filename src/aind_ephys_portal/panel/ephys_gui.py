@@ -10,6 +10,8 @@ pn.extension("tabulator", "gridstack")
 from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
 
 from spikeinterface_gui import run_mainwindow
+from spikeinterface_gui.launcher import instantiate_analyzer_and_recording
+
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 from spikeinterface.curation import validate_curation_dict
@@ -28,8 +30,9 @@ default_curation_dict = {
         }, 
     },
     "manual_labels": [],
-    "merge_unit_groups": [],
-    "removed_units": [],
+    "removed": [],
+    "merges": [],
+    "splits": [],
 }
 
 help_txt = """
@@ -40,6 +43,7 @@ Sorting Analyzer not loaded. Follow the steps below to launch the SpikeInterface
 3. Click "Launch!" to start the SpikeInterface GUI.
 """
 
+# Define the layout for the AIND Ephys GUI
 aind_layout = dict(
     zone1=["unitlist", "curation", "merge", "spikelist"],
     zone2=[],
@@ -155,16 +159,6 @@ class EphysGuiView(param.Parameterized):
         recording_processed = si.load(recording_dict)
         print(f"Processed recording loaded: {recording_processed}")
         self.analyzer.set_temporary_recording(recording_processed)
-
-    def _check_if_s3_folder_exists(self, location):
-        bucket_name = location.split("/")[2]
-        prefix = "/".join(location.split("/")[3:])
-        try:
-            s3 = boto3.client("s3")
-            response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=1)
-            return "Contents" in response
-        except Exception as e:
-            return False
 
     def _create_main_window(self):
         if self.analyzer is not None:
