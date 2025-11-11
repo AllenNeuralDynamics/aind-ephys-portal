@@ -42,13 +42,17 @@ aind_layout = dict(
 help_txt = """
 ## Usage
 
+Sorting Analyzer not loaded. Follow the steps below to launch the SpikeInterface GUI:
+
 1. Enter the path to the SpikeInterface analyzer Zarr file.
 2. (Optional) Enter the path to the processed recording folder.
-3. Click "Launch!" to start the Ephys GUI.
+3. Click "Launch!" to start the SpikeInterface GUI.
 """
 
 
 class EphysGuiView(param.Parameterized):
+
+    refresh = param.Event()
 
     def __init__(self, analyzer_path, recording_path, launch=True, **params):
         """Construct the QCPanel object"""
@@ -60,30 +64,51 @@ class EphysGuiView(param.Parameterized):
         self.analyzer = None
         self.launch = launch
 
+        self.analyzer_input = pn.widgets.TextInput(
+            name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
+        )
+        self.recording_input = pn.widgets.TextInput(
+            name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
+        )
+        self.launch_button = pn.widgets.Button(
+            name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"
+        )
+
         # Create initial layout
         self.top_panel = pn.Row(
-            pn.widgets.TextInput(
-                name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
-            ),
-            pn.widgets.TextInput(
-                name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
-            ),
-            pn.widgets.Button(name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"),
+            self.analyzer_input,
+            self.recording_input,
+            self.launch_button,
             sizing_mode="stretch_width",
         )
-        self.help_pane = pn.pane.Markdown(
+        help_pane = pn.pane.Markdown(
             help_txt,
             sizing_mode="stretch_both",
         )
-        self.layout = pn.Column(
-            self.top_panel,
-            self.help_pane,
+        # initialize with gridstack with same layout as GUI!
+        self.gui_tab = pn.Column(sizing_mode="stretch_both")
+
+        log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = Tee(original_stdout, log_output)
+        sys.stderr = Tee(original_stderr, log_output)
+
+        self.log_tab = pn.Row(help_pane, log_output)
+
+        self.tabs = pn.Tabs(
+            ("GUI", self.gui_tab),
+            ("Log", self.log_tab),
+            tabs_location="below",
+            sizing_mode="stretch_both",
         )
 
-        # Store widget references
-        self.analyzer_input = self.layout[0][0]
-        self.recording_input = self.layout[0][1]
-        self.launch_button = self.layout[0][2]
+        self.tabs.active = 1  # Set default tab to Log
+
+        self.layout = pn.Column(
+            self.top_panel,
+            self.tabs,
+        )
 
         # Setup event handlers
         self.analyzer_input.param.watch(self.update_values, "value")
@@ -91,27 +116,28 @@ class EphysGuiView(param.Parameterized):
         self.launch_button.on_click(self.on_click)
         if self.launch and self.analyzer_path != "":
             # # # Schedule initialization to run after UI is rendered
-            # def delayed_init():
-            #     self._initialize()
-            #     return False  # Don't repeat the callback
+            def delayed_init():
+                self._initialize()
+                return False  # Don't repeat the callback
 
             # # Add a short delay to let the UI render
-            # # pn.state.add_periodic_callback(delayed_init, period=1000, count=1)
-            # # self._initialize()
-            # pn.state.execute(self._initialize_async)
+            # pn.state.add_periodic_callback(delayed_init, period=500, count=1)
             self._initialize()
+            # pn.state.execute(self._initialize_async)
+            # self._initialize()
 
     def _initialize(self):
         # Show loading UI
-        spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
-        log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-        self.layout[1] = pn.Row(spinner, log_output)
+        self.tabs.active = 1  # Switch to log tab
+        # spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
+        # log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
+        # self.layout[1] = pn.Row(spinner, log_output)
 
-        # Redirect stdout/stderr
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        sys.stdout = Tee(original_stdout, log_output)
-        sys.stderr = Tee(original_stderr, log_output)
+        # # Redirect stdout/stderr
+        # original_stdout = sys.stdout
+        # original_stderr = sys.stderr
+        # sys.stdout = Tee(original_stdout, log_output)
+        # sys.stderr = Tee(original_stderr, log_output)
         t_start = time.perf_counter()
         print(
             f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
@@ -119,17 +145,27 @@ class EphysGuiView(param.Parameterized):
         self._initialize_analyzer()
         if self.recording_path != "":
             self._set_processed_recording()
-        self.win = self._create_main_window()
+        self.sigui = self._create_main_window()
 
-        # # Restore stdout/stderr
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
+        # # # Restore stdout/stderr
+        # sys.stdout = original_stdout
+        # sys.stderr = original_stderr
 
-        if self.win is not None:
-            self.layout[1] = self.win
-
+        # if self.win is not None:
         t_stop = time.perf_counter()
         print(f"Ephys GUI initialized in time: {t_stop - t_start:.2f} seconds")
+        # self.tabs.objects = [
+        #     self.sigui.main_layout,
+        #     self.log_tab
+        # ]
+        self.tabs[0].clear()
+        self.tabs[0].append(self.sigui.main_layout)
+        # self.gui_tab.clear()
+        # self.gui_tab.append(self.sigui.main_layout)
+        # time.sleep(1)  # Give time for the tab to update
+        self.tabs.active = 0  # Switch back to GUI tab
+        # trigger a refresh
+        # self.sigui.refresh_all_views()
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
@@ -200,8 +236,7 @@ class EphysGuiView(param.Parameterized):
             )
 
             # Ensure the layout is not marked as servable
-            main_layout = win.main_layout
-            return main_layout
+            return win
         else:
             return None
 
@@ -213,8 +248,10 @@ class EphysGuiView(param.Parameterized):
     def on_click(self, event):
         # with self.loading_context():
         print("Launching SpikeInterface GUI!")
-        # self._initialize()
-        pn.state.execute(self._initialize)
+        self._initialize()
+        # pn.state.execute(self._initialize)
+        self.param.trigger("refresh")
+        self.sigui.refresh_all_views()
 
     def panel(self):
         """Return the panel layout"""
