@@ -24,17 +24,29 @@ ram_monitor = pn.widgets.indicators.Progress(
     height=30,
 )
 
+cpu_monitor = pn.widgets.indicators.Progress(
+    name="CPU Usage",
+    value=int(psutil.cpu_percent()),
+    max=100,
+    bar_color="success" if psutil.cpu_percent() < 70 else "warning" if psutil.cpu_percent() < 90 else "danger",
+    width=400,
+    height=30,
+)
+
 
 # --- Periodic update ---
-def update_ram_usage():
+def update_usage():
     used_gb, total_gb, percent = get_mem_info()
     ram_monitor.value = int(used_gb)
     ram_monitor.bar_color = "success" if percent < 70 else "warning" if percent < 90 else "danger"
+    cpu_percent = psutil.cpu_percent()
+    cpu_monitor.value = int(cpu_percent)
+    cpu_monitor.bar_color = "success" if cpu_percent < 70 else "warning" if cpu_percent < 90 else "danger"
 
-
-pn.state.add_periodic_callback(update_ram_usage, period=2000)
+pn.state.add_periodic_callback(update_usage, period=2000)
 
 ram_usage_label = pn.widgets.StaticText(value="🐏 RAM Usage", height=30)
+cpu_usage_label = pn.widgets.StaticText(value="🖥️ CPU Usage", height=30)
 active_user_count_label = pn.widgets.StaticText(value="🧑‍🔬 Active Users", height=30)
 active_user_count = pn.widgets.StaticText(value="0", height=30)
 
@@ -45,5 +57,12 @@ def update_user_count():
 
 pn.state.add_periodic_callback(update_user_count, period=2000)
 
-# --- Layout ---
-monitor = pn.Row(ram_usage_label, ram_monitor, active_user_count_label, active_user_count, sizing_mode="stretch_width")
+monitor = pn.Row(
+    ram_usage_label,
+    ram_monitor,
+    cpu_usage_label,
+    cpu_monitor,
+    active_user_count_label, 
+    active_user_count,
+    sizing_mode="stretch_width"
+)

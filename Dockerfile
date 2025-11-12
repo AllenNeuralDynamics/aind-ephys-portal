@@ -22,10 +22,16 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
 # Install
 RUN pip install wavpack-numcodecs
 
+# Install spikeinterface from source
+RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
+    cd spikeinterface && \
+    git checkout d6f8c5af9d33aca3d9191472205b91adc3ca1faf && \
+    pip install . && cd ..
+
 # Install spikeinterface-gui from source
-RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
+RUN git clone https://github.com/SpikeInterface/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout c09e4e8211873dea901bc12c0e9091bf3ba71892 && \
+    git checkout 176c1b12f731d34e320c626d7ec3b1def011c791 && \
     pip install . && cd ..
 
 
