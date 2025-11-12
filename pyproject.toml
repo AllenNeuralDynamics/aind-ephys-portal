@@ -19,6 +19,7 @@ dependencies = [
     "spikeinterface[full]>=0.102.0",
     "pandas>=1.2.0",
     "numpy>=1.20.0",
+    "psutil",
     "boto3",
     "s3fs>=2025.2.0",
     "numcodecs<0.16.0",
