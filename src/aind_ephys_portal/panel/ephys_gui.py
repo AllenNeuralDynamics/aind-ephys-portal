@@ -114,7 +114,7 @@ class EphysGuiView(param.Parameterized):
             def delayed_init():
                 self._initialize()
                 return False  # Don't repeat the callback
-            pn.state.add_periodic_callback(delayed_init, period=500, count=1)
+            pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
 
     def _initialize(self):
         self.layout[1] = self.loading_banner
@@ -181,7 +181,6 @@ class EphysGuiView(param.Parameterized):
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
-                skip_extensions=["waveforms"],
                 displayed_unit_properties=displayed_unit_properties,
                 curation_dict=curation_dict,
                 mode="web",
