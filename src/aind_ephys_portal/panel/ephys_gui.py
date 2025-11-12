@@ -2,7 +2,6 @@ import sys
 import param
 import boto3
 import time
-from copy import deepcopy
 
 import panel as pn
 
@@ -15,6 +14,8 @@ from spikeinterface_gui.launcher import instantiate_analyzer_and_recording
 
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
+from spikeinterface.curation import validate_curation_dict
+from spikeinterface_gui.curation_tools import empty_curation_data, default_label_definitions
 
 from .utils import Tee
 
@@ -34,17 +35,24 @@ default_curation_dict = {
     "splits": [],
 }
 
+help_txt = """
+## Usage
+Sorting Analyzer not loaded. Follow the steps below to launch the SpikeInterface GUI:
+1. Enter the path to the SpikeInterface analyzer Zarr file.
+2. (Optional) Enter the path to the processed recording folder.
+3. Click "Launch!" to start the SpikeInterface GUI.
+"""
 
 # Define the layout for the AIND Ephys GUI
 aind_layout = dict(
-    zone1=['unitlist', 'curation', 'mergelist', 'spikelist'],
+    zone1=["unitlist", "curation", "merge", "spikelist"],
     zone2=[],
-    zone3=['spikeamplitude', 'spikedepth', 'trace', 'tracemap'],
+    zone3=["spikeamplitude", "spikedepth", "spikerate", "trace", "tracemap"],
     zone4=[],
-    zone5=['probe'],
-    zone6=['ndscatter', 'similarity'],
-    zone7=['waveform'],
-    zone8=['correlogram'],
+    zone5=["probe"],
+    zone6=["ndscatter", "similarity"],
+    zone7=["waveform", "waveformheatmap"],
+    zone8=["correlogram", "metrics", "mainsettings"],
 )
 
 
@@ -59,60 +67,73 @@ class EphysGuiView(param.Parameterized):
         self.recording_path = recording_path
         self.analyzer = None
 
-        # Create initial layout
-        self.layout = pn.Column(
-            pn.Row(
-                pn.widgets.TextInput(
-                    name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
-                ),
-                pn.widgets.TextInput(
-                    name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
-                ),
-                pn.widgets.Button(name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"),
-                sizing_mode="stretch_width",
-            ),
-            self._create_main_window(),
+        self.analyzer_input = pn.widgets.TextInput(
+            name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
+        )
+        self.recording_input = pn.widgets.TextInput(
+            name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
+        )
+        self.launch_button = pn.widgets.Button(
+            name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"
         )
 
-        # Store widget references
-        self.analyzer_input = self.layout[0][0]
-        self.recording_input = self.layout[0][1]
-        self.launch_button = self.layout[0][2]
+        self.spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
+        self.log_output_text = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
+        clear_log_button = pn.widgets.Button(name="Clear Log", button_type="warning", sizing_mode="stretch_width")
+        clear_log_button.on_click(self._clear_log)
+        self.log_output = pn.Column(self.log_output_text, clear_log_button, sizing_mode="stretch_both")
+
+        original_stdout = sys.stdout
+        sys.stdout = Tee(original_stdout, self.log_output_text)
+        original_stderr = sys.stderr
+        sys.stderr = Tee(original_stderr, self.log_output_text)
+
+        self.loading_banner = pn.Row(self.spinner, self.log_output, sizing_mode="stretch_both")
+
+        self.top_panel = pn.Row(
+            self.analyzer_input,
+            self.recording_input,
+            self.launch_button,
+            sizing_mode="stretch_width",
+        )
+
+        # Create initial layout
+        self.layout = pn.Column(
+            self.top_panel,
+            self._create_main_window(),
+            sizing_mode="stretch_both",
+        )
 
         # Setup event handlers
         self.analyzer_input.param.watch(self.update_values, "value")
         self.recording_input.param.watch(self.update_values, "value")
         self.launch_button.on_click(self.on_click)
 
+        if self.analyzer_path != "":
+            # # # Schedule initialization to run after UI is rendered
+            def delayed_init():
+                self._initialize()
+                return False  # Don't repeat the callback
+            pn.state.add_periodic_callback(delayed_init, period=500, count=1)
+
     def _initialize(self):
+        self.layout[1] = self.loading_banner
+        self.log_output_text.value = ""
         if self.analyzer_input.value != "":
             t_start = time.perf_counter()
-            spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
-            # Create a TextArea widget to display logs
-            log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-
-            original_stdout = sys.stdout
-            sys.stdout = Tee(original_stdout, log_output)  # Redirect stdout
-
-            original_stderr = sys.stderr
-            sys.stderr = Tee(original_stderr, log_output)  # Redirect stderr
-
-            self.layout[1] = pn.Row(spinner, log_output)
-
             print(
                 f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
             )
-
-            self.analyzer = si.load(self.analyzer_path, load_extensions=False)
-            if self.recording_path and self.recording_path != "" and not self.analyzer.has_recording():
+            self._initialize_analyzer()
+            if self.recording_path != "":
                 self._set_processed_recording()
             self.win = self._create_main_window()
             self.layout[1] = self.win
             print("Ephys GUI initialized successfully!")
             t_stop = time.perf_counter()
             print(f"Initialization time: {t_stop - t_start:.2f} seconds")
-            sys.stdout = sys.__stdout__  # Reset stdout
-            sys.stderr = sys.__stderr__  # Reset stderr
+        else:
+            print("Analyzer path is empty. Please provide a valid path.")
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
@@ -142,7 +163,7 @@ class EphysGuiView(param.Parameterized):
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
-            curation_dict = deepcopy(default_curation_dict)
+            curation_dict = default_curation_dict
             curation_dict["unit_ids"] = self.analyzer.unit_ids
             if "decoder_label" in self.analyzer.sorting.get_property_keys():
                 decoder_labels = self.analyzer.get_sorting_property("decoder_label")
@@ -150,6 +171,12 @@ class EphysGuiView(param.Parameterized):
                 curation_dict["removed"] = list(noise_units)
                 for unit_id in noise_units:
                     curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
+
+            try:
+                validate_curation_dict(curation_dict)
+            except ValueError as e:
+                print(f"Curated dictionary is invalid: {e}")
+                curation_dict = None
 
             win = run_mainwindow(
                 analyzer=self.analyzer,
@@ -159,18 +186,28 @@ class EphysGuiView(param.Parameterized):
                 curation_dict=curation_dict,
                 mode="web",
                 start_app=False,
+                panel_window_servable=False,
                 verbose=True,
-                layout=aind_layout,
-                panel_window_servable=False
+                layout=aind_layout
             )
-            return win.main_layout
+            self.log_output.value = ""
+            tabs = pn.Tabs(
+                ("GUI", win.main_layout),
+                ("Log", self.log_output),
+                tabs_location="below",
+                sizing_mode="stretch_both",
+            )
+            return tabs
         else:
-            return pn.pane.Markdown("Analyzer not initialized")
+            return pn.pane.Markdown(help_txt, sizing_mode="stretch_both")
 
     def update_values(self, event):
         self.analyzer_path = self.analyzer_input.value
         self.recording_path = self.recording_input.value
         self._initialize()
+
+    def _clear_log(self, event):
+        self.log_output_text.value = ""
 
     def on_click(self, event):
         print("Launching SpikeInterface GUI!")

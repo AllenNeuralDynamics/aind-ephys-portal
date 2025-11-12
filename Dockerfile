@@ -22,12 +22,18 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
 # Install
 RUN pip install wavpack-numcodecs
 
+# Install spikeinterface from source
+RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
+    cd spikeinterface && \
+    git checkout d6f8c5af9d33aca3d9191472205b91adc3ca1faf && \
+    pip install . && cd ..
+
 # Install spikeinterface-gui from source
-RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
+RUN git clone https://github.com/SpikeInterface/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout 1e1064be602867c6647eb9665c479cde6aca159f && \
+    git checkout 176c1b12f731d34e320c626d7ec3b1def011c791 && \
     pip install . && cd ..
 
 
 EXPOSE 8000
-ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_gui_app.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --keep-alive 10000 --index ephys_portal_app.py --warm"]
+ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_gui_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --keep-alive 10000 --index ephys_portal_app.py --num-procs 4 --warm"]
