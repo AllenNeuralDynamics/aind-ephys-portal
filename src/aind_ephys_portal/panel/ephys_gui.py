@@ -7,7 +7,8 @@ import panel as pn
 
 pn.extension("tabulator", "gridstack")
 
-from aind_ephys_portal.docdb.database import get_name_from_id, get_asset_by_name, get_raw_asset_by_name
+from aind_ephys_portal.monitor import monitor
+
 
 from spikeinterface_gui import run_mainwindow
 from spikeinterface_gui.launcher import instantiate_analyzer_and_recording
@@ -90,17 +91,15 @@ class EphysGuiView(param.Parameterized):
 
         self.loading_banner = pn.Row(self.spinner, self.log_output, sizing_mode="stretch_both")
 
-        self.top_panel = pn.Row(
+        self.launcher_panel = pn.Row(
             self.analyzer_input,
             self.recording_input,
             self.launch_button,
             sizing_mode="stretch_width",
         )
-
-        # Create initial layout
-        self.layout = pn.Column(
-            self.top_panel,
-            self._create_main_window(),
+        self.monitor_panel = pn.Column(
+            self.launcher_panel,
+            monitor,
             sizing_mode="stretch_both",
         )
 
@@ -109,12 +108,25 @@ class EphysGuiView(param.Parameterized):
         self.recording_input.param.watch(self.update_values, "value")
         self.launch_button.on_click(self.on_click)
 
+        empty_widget = pn.pane.Markdown(" ", height=1)
         if self.analyzer_path != "":
+            # Create initial layout
+            self.layout = pn.Column(
+                empty_widget,
+                self._create_main_window(),
+                sizing_mode="stretch_both",
+            )
             # # # Schedule initialization to run after UI is rendered
             def delayed_init():
                 self._initialize()
                 return False  # Don't repeat the callback
             pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
+        else:
+            self.layout = pn.Column(
+                self.launcher_panel,
+                self._create_main_window(),
+                sizing_mode="stretch_both",
+            )
 
     def _initialize(self):
         self.layout[1] = self.loading_banner
@@ -192,6 +204,7 @@ class EphysGuiView(param.Parameterized):
             self.log_output.value = ""
             tabs = pn.Tabs(
                 ("GUI", win.main_layout),
+                ("Launch/Monitor", self.monitor_panel),
                 ("Log", self.log_output),
                 tabs_location="below",
                 sizing_mode="stretch_both",
@@ -203,7 +216,6 @@ class EphysGuiView(param.Parameterized):
     def update_values(self, event):
         self.analyzer_path = self.analyzer_input.value
         self.recording_path = self.recording_input.value
-        self._initialize()
 
     def _clear_log(self, event):
         self.log_output_text.value = ""
