@@ -13,16 +13,13 @@ authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
 dependencies = [
-    "panel>=1.0.0,<1.6.2",
+    "panel>=1.0.0",
     "param>=1.12.0",
-    "aind-data-access-api>=0.1.0",
-    "spikeinterface[full]>=0.102.0",
-    "pandas>=1.2.0",
-    "numpy>=1.20.0",
     "psutil",
     "boto3",
     "s3fs>=2025.2.0",
-    "numcodecs<0.16.0",
+    "aind-data-access-api>=0.1.0",
+    "spikeinterface[full]>=0.103.0",
     "spikeinterface-gui"
 ]
 
