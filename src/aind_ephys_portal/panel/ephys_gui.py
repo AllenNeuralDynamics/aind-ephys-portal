@@ -1,13 +1,12 @@
-import sys
+import psutil
 import param
-import boto3
 import time
+import gc
+import ctypes
 
 import panel as pn
 
 pn.extension("tabulator", "gridstack")
-
-from aind_ephys_portal.monitor import monitor
 
 
 from spikeinterface_gui import run_mainwindow
@@ -18,7 +17,8 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.curation import validate_curation_dict
 from spikeinterface_gui.curation_tools import empty_curation_data, default_label_definitions
 
-from .utils import Tee
+from aind_ephys_portal.panel.logging import setup_logging, local_log_context
+from aind_ephys_portal.panel.utils import Tee
 
 
 displayed_unit_properties = ["decoder_label", "default_qc", "firing_rate", "y", "snr", "amplitude_median", "isi_violation_ratio"]
@@ -38,10 +38,9 @@ default_curation_dict = {
 
 help_txt = """
 ## Usage
-Sorting Analyzer not loaded. Follow the steps below to launch the SpikeInterface GUI:
-1. Enter the path to the SpikeInterface analyzer Zarr file.
-2. (Optional) Enter the path to the processed recording folder.
-3. Click "Launch!" to start the SpikeInterface GUI.
+Sorting Analyzer not loaded. Embed the `analyzer_path` parameter in the URL 
+(and optionally the `recording_path` parameter) to launch the GUI. For example:
+ephys.allenneuraldymamics.org/ephys_gui_app?analyzer_path="/path/to/analyzer.zarr"&recording_path="/path/to/recording.zarr"
 """
 
 # Define the layout for the AIND Ephys GUI
@@ -63,99 +62,94 @@ class EphysGuiView(param.Parameterized):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
-        # Setup minimal record information from DocDB
+        setup_logging()
+
         self.analyzer_path = analyzer_path
         self.recording_path = recording_path
         self.analyzer = None
-
-        self.analyzer_input = pn.widgets.TextInput(
-            name="Analyzer path", value=self.analyzer_path, height=50, sizing_mode="stretch_width"
-        )
-        self.recording_input = pn.widgets.TextInput(
-            name="Recording path (optional)", value=self.recording_path, height=50, sizing_mode="stretch_width"
-        )
-        self.launch_button = pn.widgets.Button(
-            name="Launch!", button_type="primary", height=50, sizing_mode="stretch_width"
-        )
+        self._cleanup_registered = False
 
         self.spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
-        self.log_output_text = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-        clear_log_button = pn.widgets.Button(name="Clear Log", button_type="warning", sizing_mode="stretch_width")
-        clear_log_button.on_click(self._clear_log)
-        self.log_output = pn.Column(self.log_output_text, clear_log_button, sizing_mode="stretch_both")
-
-        original_stdout = sys.stdout
-        sys.stdout = Tee(original_stdout, self.log_output_text)
-        original_stderr = sys.stderr
-        sys.stderr = Tee(original_stderr, self.log_output_text)
-
+        self.log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
         self.loading_banner = pn.Row(self.spinner, self.log_output, sizing_mode="stretch_both")
 
-        self.launcher_panel = pn.Row(
-            self.analyzer_input,
-            self.recording_input,
-            self.launch_button,
-            sizing_mode="stretch_width",
-        )
-        self.monitor_panel = pn.Column(
-            self.launcher_panel,
-            monitor,
-            sizing_mode="stretch_both",
-        )
-
-        # Setup event handlers
-        self.analyzer_input.param.watch(self.update_values, "value")
-        self.recording_input.param.watch(self.update_values, "value")
-        self.launch_button.on_click(self.on_click)
-
-        empty_widget = pn.pane.Markdown(" ", height=1)
+        self.win = None
         if self.analyzer_path != "":
-            # Create initial layout
             self.layout = pn.Column(
-                empty_widget,
                 self._create_main_window(),
                 sizing_mode="stretch_both",
             )
-            # # # Schedule initialization to run after UI is rendered
             def delayed_init():
                 self._initialize()
-                return False  # Don't repeat the callback
-            pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
+                return False
+            self._init_cb = pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
         else:
             self.layout = pn.Column(
-                self.launcher_panel,
-                self._create_main_window(),
+                pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
 
+    def _register_cleanup(self):
+        """Register cleanup on the current document. Must be called from within the session."""
+        if self._cleanup_registered:
+            return
+        doc = pn.state.curdoc
+        if doc is not None and hasattr(doc, "on_session_destroyed"):
+            def _on_destroy(session_context, view=self):
+                view.cleanup()
+            doc.on_session_destroyed(_on_destroy)
+            self._cleanup_registered = True
+            print(f"[GUI] Cleanup registered on doc {id(doc)}")
+
     def _initialize(self):
-        self.layout[1] = self.loading_banner
-        self.log_output_text.value = ""
-        if self.analyzer_input.value != "":
-            t_start = time.perf_counter()
-            print(
-                f"Initializing Ephys GUI for:\nAnalyzer path: {self.analyzer_path}\nRecording path: {self.recording_path}"
-            )
-            self._initialize_analyzer()
-            if self.recording_path != "":
-                self._set_processed_recording()
-            self.win = self._create_main_window()
-            self.layout[1] = self.win
-            print("Ephys GUI initialized successfully!")
-            t_stop = time.perf_counter()
-            print(f"Initialization time: {t_stop - t_start:.2f} seconds")
-        else:
-            print("Analyzer path is empty. Please provide a valid path.")
+        # Register cleanup HERE — the document is now bound to this GUI session
+        self._register_cleanup()
+
+        self.layout[0] = self.loading_banner
+        self.log_output.value = ""
+        with local_log_context(self.log_output):
+            error = None
+            if self.analyzer_path != "":
+                try:
+                    t_start = time.perf_counter()
+                    initial_mem = psutil.virtual_memory()
+                    total_ram = initial_mem.total / (1024 ** 3)
+                    current_ram_usage = initial_mem.used / (1024 ** 3)
+                    print(f"Initializing Ephys GUI")
+                    print(f"\nRAM Usage before initialization: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
+
+                    print(f"\nLoading with the following paths:")
+                    print(f"Analyzer path:\n{self.analyzer_path}\nRecording path:\n{self.recording_path}")
+                    self._initialize_analyzer()
+                    if self.recording_path != "":
+                        self._set_processed_recording()
+                    win = self._create_main_window()
+                    self.layout[0] = win
+                    print("\nEphys GUI initialized successfully!")
+                    t_stop = time.perf_counter()
+                    print(f"Initialization time: {t_stop - t_start:.2f} seconds")
+
+                    final_mem = psutil.virtual_memory()
+                    final_ram_usage = final_mem.used / (1024 ** 3)
+                    print(f"\nRAM Usage after initialization: {final_ram_usage:.2f} / {total_ram:.2f} GB\n")
+                except Exception as e:
+                    error = e
+            else:
+                print("Analyzer path is empty. Please provide a valid path.")
+
+            if error is not None:
+                print(f"Error during initialization: {error}")
+                self.layout[0] = pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
             raise ValueError("Only Zarr files are supported for now.")
-        print(f"Loading analyzer from {self.analyzer_path}...")
+        print(f"Loading analyzer...")
         self.analyzer = si.load(self.analyzer_path, load_extensions=False)
         print(f"Analyzer loaded: {self.analyzer}")
 
     def _set_processed_recording(self):
-        print(f"Loading processed recording from {self.recording_path}")
+        print(f"Loading processed recording...")
         analyzer_root = self.analyzer._get_zarr_root(mode="r")
         recording_root = analyzer_root["recording"]
         recording_dict = recording_root[0]
@@ -197,32 +191,74 @@ class EphysGuiView(param.Parameterized):
                 curation_dict=curation_dict,
                 mode="web",
                 start_app=False,
+                # for testing
+                skip_extensions=["waveforms", "principal_components"],
                 panel_window_servable=False,
                 verbose=True,
                 layout=aind_layout
             )
-            self.log_output.value = ""
-            tabs = pn.Tabs(
-                ("GUI", win.main_layout),
-                ("Launch/Monitor", self.monitor_panel),
-                ("Log", self.log_output),
-                tabs_location="below",
-                sizing_mode="stretch_both",
-            )
-            return tabs
+            self.win = win
+            return win.main_layout
         else:
             return pn.pane.Markdown(help_txt, sizing_mode="stretch_both")
 
-    def update_values(self, event):
-        self.analyzer_path = self.analyzer_input.value
-        self.recording_path = self.recording_input.value
+    def cleanup(self):
+        """Release resources when the session is closed."""
+        print("Cleaning up Ephys GUI resources...")
+        initial_mem = psutil.virtual_memory()
+        total_ram = initial_mem.total / (1024 ** 3)
+        current_ram_usage = initial_mem.used / (1024 ** 3)
+        print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
-    def _clear_log(self, event):
-        self.log_output_text.value = ""
+        # 1) Release GUI controller references
+        if self.win is not None:
+            del self.win
 
-    def on_click(self, event):
-        print("Launching SpikeInterface GUI!")
-        self._initialize()
+        # 2) Close zarr store explicitly
+        if self.analyzer is not None:
+            # Try to close the underlying zarr store
+            zarr_root = getattr(self.analyzer, "sorting_analyzer", None) or self.analyzer
+            store = getattr(zarr_root, "_root", None)
+            if store is not None:
+                inner_store = getattr(store, "store", None)
+                if inner_store is not None and hasattr(inner_store, "close"):
+                    inner_store.close()
+                    print("Zarr store closed.")
+            self.analyzer = None
+            print("Analyzer resources released.")
+
+        # 3) Clear layout references
+        if self._init_cb is not None:
+            self._init_cb.stop()
+            self._init_cb = None
+        self.layout = None
+        self.log_output = None
+        self.spinner = None
+        self.loading_banner = None
+
+        # 4) Force garbage collection (two passes for ref cycles)
+        gc.collect()
+        gc.collect()
+
+        # 5) Force glibc to return freed memory to OS
+        # try:
+        #     ctypes.CDLL("libc.so.6").malloc_trim(0)
+        #     print("malloc_trim: freed memory returned to OS.")
+        # except Exception as e:
+        #     print(f"malloc_trim failed: {e}")
+
+        final_mem = psutil.virtual_memory()
+        current_ram_usage = final_mem.used / (1024 ** 3)
+        print(f"\nRAM Usage after cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
+
+
+        # Debug: compare RSS vs OS-reported used
+        import os
+        process = psutil.Process(os.getpid())
+        rss = process.memory_info().rss / 1024**2
+        print(f"\nProcess RSS: {rss:.1f} MB")
+        print(f"OS used (includes page cache): {psutil.virtual_memory().used / 1024**2:.1f} MB")
+        print(f"OS available: {psutil.virtual_memory().available / 1024**2:.1f} MB")
 
     def panel(self):
         """Return the panel layout"""

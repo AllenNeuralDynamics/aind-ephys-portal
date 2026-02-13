@@ -1,5 +1,7 @@
-import panel as pn
 import io
+import sys
+
+import panel as pn
 
 EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}"
 
@@ -56,14 +58,28 @@ def format_css_background():
 
 
 class Tee(io.StringIO):
-    def __init__(self, original_stdout, log_output):
+    def __init__(self, log_output):
         super().__init__()
-        self.original_stdout = original_stdout
         self.log_output = log_output
+        self._orig_out = None
+        self._orig_err = None
+
+    def __enter__(self):
+        self._orig_out = sys.stdout
+        self._orig_err = sys.stderr
+        sys.stdout = self
+        sys.stderr = self
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        sys.stdout = self._orig_out
+        sys.stderr = self._orig_err
 
     def write(self, message):
-        self.original_stdout.write(message)  # Print to console
-        self.log_output.value += message  # Append to log output
+        if self._orig_out:
+            self._orig_out.write(message)
+        self.log_output.value += message
 
     def flush(self):
-        self.original_stdout.flush()
+        if self._orig_out:
+            self._orig_out.flush()

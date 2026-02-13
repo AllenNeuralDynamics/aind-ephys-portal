@@ -8,6 +8,7 @@ import boto3
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
 from aind_ephys_portal.panel.utils import format_link, OUTER_STYLE, EPHYSGUI_LINK_PREFIX
+from aind_ephys_portal.panel.logging import setup_logging
 
 s3_client = boto3.client("s3")
 
@@ -25,6 +26,7 @@ class EphysPortal:
 
     def __init__(self):
         """Initialize the SIGUI Portal application."""
+        setup_logging()  # Ensure logging is set up for this panel
         self.search_options = SearchOptions()
         # Get the search input widget
         self.search_bar = pn.widgets.TextInput(

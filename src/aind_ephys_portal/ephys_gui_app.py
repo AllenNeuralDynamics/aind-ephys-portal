@@ -3,7 +3,6 @@
 import urllib
 import param
 
-
 import panel as pn
 pn.extension("tabulator", "gridstack")
 
@@ -16,7 +15,6 @@ from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 # State sync
 class Settings(param.Parameterized):
     """Top-level settings for QC app"""
-
     analyzer_path = param.String(default="")
     recording_path = param.String(default="")
 
@@ -29,6 +27,5 @@ settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
 settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
 ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path)
-app_layout = pn.Column(ephys_gui.layout, sizing_mode="stretch_both", min_height=600)
 
-app_layout.servable(title="AIND Ephys GUI")
+ephys_gui.panel().servable(title="AIND Ephys GUI")

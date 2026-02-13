@@ -1,6 +1,8 @@
 import panel as pn
 import psutil
 
+from aind_ephys_portal.panel.logging import list_buffers, remove_buffer, setup_logging
+
 pn.extension()
 
 
@@ -66,3 +68,56 @@ monitor = pn.Row(
     active_user_count,
     sizing_mode="stretch_width"
 )
+
+setup_logging()
+
+log = pn.Column(sizing_mode="stretch_both")
+
+def _get_active_index():
+    if len(log) == 0:
+        return 0
+    tabs_widget = log[0]
+    return getattr(tabs_widget, "active", 0)
+
+def refresh_tabs():
+    buffers = list_buffers(
+        skip_routes=["ephys_monitor_app", "ephys_launcher_app"],
+    )
+    prev_active = _get_active_index()
+    if not buffers:
+        log[:] = [pn.pane.Markdown("No logs yet.", sizing_mode="stretch_both")]
+        return
+
+    tabs = []
+    for key, widget in buffers.items():
+        route, session_id = key
+        title = f"{route} | {str(session_id)[:8]}"
+
+        close_btn = pn.widgets.Button(name="Close", button_type="danger", width=80)
+
+        def _close(event, key=key):
+            remove_buffer(key)
+            refresh_tabs()
+
+        close_btn.on_click(_close)
+
+        tab_body = pn.Column(
+            pn.Row(pn.pane.Markdown(f"**{title}**"), pn.Spacer(), close_btn),
+            widget,
+            sizing_mode="stretch_both",
+        )
+        tabs.append((title, tab_body))
+
+    tabs_widget = pn.Tabs(*tabs, sizing_mode="stretch_both")
+    if tabs:
+        tabs_widget.active = min(prev_active, len(tabs) - 1)
+
+    log[:] = [tabs_widget]
+
+
+pn.state.add_periodic_callback(refresh_tabs, period=2000)
+refresh_tabs()
+
+app = pn.Column(monitor, log, sizing_mode="stretch_both")
+
+app.servable(title="AIND Ephys Monitor")
