@@ -54,7 +54,6 @@ class EphysLauncher:
             sizing_mode="stretch_width",
         )
 
-    
     def _build_gui_url(self):
         analyzer_path = self.analyzer_input.value.strip()
         recording_path = self.recording_input.value.strip()
@@ -82,7 +81,6 @@ class EphysLauncher:
 
         return path
 
-
     def _update_link(self, event=None):
         url = self._build_gui_url()
         if not url:
@@ -91,7 +89,7 @@ class EphysLauncher:
             return
         print(f"Generated URL: {url}")
 
-        self.link_pane.object = f"<a href=\"{url}\" target=\"_blank\">Ephys Curation GUI</a>"
+        self.link_pane.object = f'<a href="{url}" target="_blank">Ephys Curation GUI</a>'
         self.url_output.value = url
 
 

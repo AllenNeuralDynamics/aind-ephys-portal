@@ -129,4 +129,3 @@ def setup_logging():
     sys.stdout = MultiSessionTee(sys.stdout)
     sys.stderr = MultiSessionTee(sys.stderr)
     _log_setup = True
-

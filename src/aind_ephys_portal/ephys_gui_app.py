@@ -4,6 +4,7 @@ import urllib
 import param
 
 import panel as pn
+
 pn.extension("tabulator", "gridstack")
 
 # Import for side effects: registers SpikeInterface GUI custom Panel/Bokeh models/resources
@@ -15,6 +16,7 @@ from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 # State sync
 class Settings(param.Parameterized):
     """Top-level settings for QC app"""
+
     analyzer_path = param.String(default="")
     recording_path = param.String(default="")
 

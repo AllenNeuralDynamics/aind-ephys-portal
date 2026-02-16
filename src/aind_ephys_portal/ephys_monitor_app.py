@@ -9,8 +9,8 @@ pn.extension()
 # --- Memory info ---
 def get_mem_info():
     mem = psutil.virtual_memory()
-    used_gb = mem.used / (1024 ** 3)
-    total_gb = mem.total / (1024 ** 3)
+    used_gb = mem.used / (1024**3)
+    total_gb = mem.total / (1024**3)
     percent = mem.percent
     return used_gb, total_gb, percent
 
@@ -69,7 +69,7 @@ def update_sessions_summary(sessions):
 
     # Count sessions per route
     route_counts = {}
-    for (route, _) in sessions.keys():
+    for route, _ in sessions.keys():
         route_counts[route] = route_counts.get(route, 0) + 1
 
     badges = []
@@ -101,13 +101,16 @@ def update_sessions_summary(sessions):
 
 # --- Log viewer ---
 log_container = pn.Column(sizing_mode="stretch_both")
-_log_panes = {}        # key → pn.pane.HTML  (the log content pane)
-_log_contents = {}     # key → last content string  (skip no-op updates)
-_tab_bodies = {}       # key → pn.Column  (the whole tab body)
-_tabs_widget = None    # the single Tabs widget we keep alive
-_prev_keys_order = []  # ordered list of keys to detect session changes
+_log_widgets = {}  # cache TextAreaInput widgets per (route, session_id)
 
 SKIP_ROUTES = ["ephys_monitor_app"]
+
+
+def _get_active_tab():
+    if len(log_container) == 0:
+        return 0
+    widget = log_container[0]
+    return getattr(widget, "active", 0)
 
 
 def _make_clear_callback(route, session_id, path):
@@ -115,11 +118,11 @@ def _make_clear_callback(route, session_id, path):
         try:
             path.write_text("")
             key = (route, session_id)
-            if key in _log_panes:
-                _log_panes[key].object = _make_log_pre("")
-                _log_contents[key] = ""
+            if key in _log_widgets:
+                _log_widgets[key].value = ""
         except Exception as e:
             print(f"Error clearing log: {e}")
+
     return _clear
 
 
@@ -128,147 +131,85 @@ def _make_delete_callback(route, session_id):
         try:
             remove_session(route=route, session_id=session_id)
             key = (route, session_id)
-            _log_panes.pop(key, None)
-            _log_contents.pop(key, None)
-            _tab_bodies.pop(key, None)
+            if key in _log_widgets:
+                del _log_widgets[key]
             refresh_log_tabs()
         except Exception as e:
             print(f"Error deleting log: {e}")
+
     return _delete
 
 
-def _make_log_pre(content):
-    """Wrap log content in a scrollable <pre>.
-
-    We do NOT use an inline <script> because Panel doesn't re-execute
-    scripts when updating .object.  Instead we keep the user's current
-    scroll position by *only* updating the text content of the <pre> via
-    Panel, and never recreating the widget.
-
-    Auto-scroll to bottom is achieved via an `afterUpdate` JS callback
-    on the pane (see _make_log_pane).
-    """
-    import html as html_mod
-    escaped = html_mod.escape(content)
-    return (
-        f'<pre class="log-pre" style="'
-        f"white-space: pre-wrap;"
-        f"word-wrap: break-word;"
-        f"overflow-y: auto;"
-        f"max-height: 500px;"
-        f"min-height: 200px;"
-        f"background: #f5f5f5;"
-        f"padding: 8px;"
-        f"font-size: 12px;"
-        f"border: 1px solid #ccc;"
-        f"border-radius: 4px;"
-        f'">{escaped}</pre>'
-    )
-
-
-def _make_log_pane(content):
-    """Create a log HTML pane with a JS callback that auto-scrolls."""
-    pane = pn.pane.HTML(_make_log_pre(content), sizing_mode="stretch_both")
-    # Whenever the HTML object changes, scroll the <pre> to the bottom.
-    # Panel exposes a jscallback on 'object' which fires client-side
-    # after the new HTML is rendered.
-    try:
-        pane.jscallback(
-            object="""
-            setTimeout(function() {
-                var el = cb_obj.el;
-                if (!el) return;
-                var pre = el.querySelector('.log-pre');
-                if (pre) { pre.scrollTop = pre.scrollHeight; }
-            }, 50);
-            """
-        )
-    except Exception:
-        pass  # jscallback not available in all Panel versions
-    return pane
-
-
 def refresh_log_tabs():
-    global _tabs_widget, _prev_keys_order
-
     all_sessions = list_sessions()
     update_sessions_summary(all_sessions)
     log_sessions = list_sessions(skip_routes=SKIP_ROUTES)
 
     if not log_sessions:
-        _tabs_widget = None
-        _prev_keys_order = []
-        log_container[:] = [pn.pane.Markdown("No active sessions.", sizing_mode="stretch_both")]
+        log_container[:] = [pn.pane.Markdown("_No log sessions._")]
         return
 
-    current_keys = list(log_sessions.keys())
-    structure_changed = (current_keys != _prev_keys_order)
+    prev_active = _get_active_tab()
 
-    # --- Update content of each session (cheap: only touches .object) ---
-    for key, path in log_sessions.items():
-        route, session_id = key
+    tabs = []
+    for (route, session_id), path in log_sessions.items():
+        title = f"{route} | {str(session_id)[:8]}"
+
+        # Read log content from file
         content = ""
         try:
             content = path.read_text()
         except Exception:
             content = "(could not read log)"
 
-        if key not in _log_panes:
-            # First time seeing this session
-            _log_panes[key] = _make_log_pane(content)
-            _log_contents[key] = content
+        # Compute height: ~16px per line, min 200, no max
+        n_lines = max(content.count("\n") + 1, 10)
+        height = max(200, n_lines * 16 + 20)
 
-            title = f"{route} | {str(session_id)[:8]}"
-            clear_btn = pn.widgets.Button(name="🗑️ Clear", button_type="warning", width=100)
-            clear_btn.on_click(_make_clear_callback(route, session_id, path))
-            delete_btn = pn.widgets.Button(name="❌ Delete", button_type="danger", width=100)
-            delete_btn.on_click(_make_delete_callback(route, session_id))
-
-            _tab_bodies[key] = pn.Column(
-                pn.Row(
-                    pn.pane.Markdown(f"**{title}**"),
-                    pn.Spacer(),
-                    clear_btn,
-                    delete_btn,
-                ),
-                _log_panes[key],
-                sizing_mode="stretch_both",
+        # Reuse or create widget
+        key = (route, session_id)
+        if key not in _log_widgets:
+            _log_widgets[key] = pn.widgets.TextAreaInput(
+                value=content,
+                disabled=True,
+                sizing_mode="stretch_width",
+                height=height,
+                stylesheets=[":host textarea { font-size: 12px; font-family: monospace; }"],
             )
-            structure_changed = True
         else:
-            # Only update the HTML text if it actually changed
-            if content != _log_contents.get(key):
-                _log_panes[key].object = _make_log_pre(content)
-                _log_contents[key] = content
+            _log_widgets[key].value = content
+            _log_widgets[key].height = height
 
-    # --- Clean up stale sessions ---
-    active_keys = set(current_keys)
-    for key in list(_log_panes.keys()):
+        # Action buttons
+        clear_btn = pn.widgets.Button(name="🗑️ Clear", button_type="warning", width=100)
+        clear_btn.on_click(_make_clear_callback(route, session_id, path))
+
+        delete_btn = pn.widgets.Button(name="❌ Delete", button_type="danger", width=100)
+        delete_btn.on_click(_make_delete_callback(route, session_id))
+
+        tab_body = pn.Column(
+            pn.Row(
+                pn.pane.Markdown(f"**{title}**"),
+                pn.Spacer(),
+                clear_btn,
+                delete_btn,
+            ),
+            _log_widgets[key],
+            sizing_mode="stretch_both",
+        )
+        tabs.append((title, tab_body))
+
+    # Clean up stale widgets
+    active_keys = set(log_sessions.keys())
+    for key in list(_log_widgets.keys()):
         if key not in active_keys:
-            _log_panes.pop(key, None)
-            _log_contents.pop(key, None)
-            _tab_bodies.pop(key, None)
-            structure_changed = True
+            del _log_widgets[key]
 
-    # --- Rebuild the Tabs widget only when sessions come/go ---
-    if structure_changed or _tabs_widget is None:
-        prev_active = 0
-        if _tabs_widget is not None:
-            prev_active = getattr(_tabs_widget, "active", 0)
+    tabs_widget = pn.Tabs(*tabs, sizing_mode="stretch_both", dynamic=True)
+    if tabs:
+        tabs_widget.active = min(prev_active, len(tabs) - 1)
 
-        tabs = []
-        for key in current_keys:
-            route, session_id = key
-            title = f"{route} | {str(session_id)[:8]}"
-            tabs.append((title, _tab_bodies[key]))
-
-        _tabs_widget = pn.Tabs(*tabs, sizing_mode="stretch_both")
-        if tabs:
-            _tabs_widget.active = min(prev_active, len(tabs) - 1)
-
-        log_container[:] = [_tabs_widget]
-
-    _prev_keys_order = current_keys
+    log_container[:] = [tabs_widget]
 
 
 pn.state.add_periodic_callback(refresh_log_tabs, period=2000)

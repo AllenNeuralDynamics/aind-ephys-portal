@@ -102,7 +102,7 @@ def get_raw_asset_by_name(asset_name: str):
 
 
 @pn.cache(ttl=TIMEOUT_1H)
-def get_all_ecephys_derived(additional_includes_in_name : str | None =None) -> List[Dict[str, Any]]:
+def get_all_ecephys_derived(additional_includes_in_name: str | None = None) -> List[Dict[str, Any]]:
     """Get a limited set of all records from the database.
 
     Returns

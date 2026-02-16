@@ -69,9 +69,7 @@ class EphysPortal:
         # Update the streams panel when a row is selected
         self.results_panel.on_click(self.update_streams)
 
-        self.refresh_button = pn.widgets.Button(
-            name="Refresh Datasets", button_type="primary", height=30, width=150
-        )
+        self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
         self.refresh_button.on_click(self.update_results)
         # Initialize with current results
         self.update_results(None)
@@ -121,7 +119,7 @@ class EphysPortal:
                     raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
                     print(f"Raw asset prefix: {raw_asset_prefix}")
                     if raw_asset_prefix is None:
-                        recording_path=""
+                        recording_path = ""
                     else:
                         recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
@@ -148,7 +146,7 @@ class EphysPortal:
         self.streams_panel.value = streams_df
 
     def get_raw_asset_location(self, asset_location):
-        asset_without_s3 = asset_location[asset_location.find("s3://") + 5:]
+        asset_without_s3 = asset_location[asset_location.find("s3://") + 5 :]
         asset_split = asset_without_s3.split("/")
         bucket_name = asset_split[0]
         session_name = "/".join(asset_split[1:])
@@ -182,12 +180,12 @@ class EphysPortal:
             pn.pane.Markdown("## Postprocessed Streams", styles={"text-align": "left"}),
             self.streams_panel,
             min_width=900,
-            max_width=1400,
+            max_width=1200,
             sizing_mode="stretch_width",
             styles=OUTER_STYLE,
             align="center",
         )
-        display = pn.Row(pn.HSpacer(max_width=50), col, pn.HSpacer(max_width=50))
+        display = pn.Row(pn.HSpacer(max_width=200), col, pn.HSpacer(max_width=200))
 
         return display
 

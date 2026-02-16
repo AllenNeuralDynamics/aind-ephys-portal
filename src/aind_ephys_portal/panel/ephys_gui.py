@@ -18,14 +18,22 @@ from spikeinterface.curation import validate_curation_dict
 from aind_ephys_portal.panel.logging import setup_logging, local_log_context
 
 
-displayed_unit_properties = ["decoder_label", "default_qc", "firing_rate", "y", "snr", "amplitude_median", "isi_violation_ratio"]
+displayed_unit_properties = [
+    "decoder_label",
+    "default_qc",
+    "firing_rate",
+    "y",
+    "snr",
+    "amplitude_median",
+    "isi_violation_ratio",
+]
 default_curation_dict = {
     "format_version": "2",
     "label_definitions": {
-        "quality":{
+        "quality": {
             "label_options": ["good", "MUA", "noise"],
             "exclusive": True,
-        }, 
+        },
     },
     "manual_labels": [],
     "removed": [],
@@ -76,9 +84,11 @@ class EphysGuiView(param.Parameterized):
                 self._create_main_window(),
                 sizing_mode="stretch_both",
             )
+
             def delayed_init():
                 self._initialize()
                 return False
+
             self._init_cb = pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
         else:
             self.layout = pn.Column(
@@ -92,8 +102,10 @@ class EphysGuiView(param.Parameterized):
             return
         doc = pn.state.curdoc
         if doc is not None and hasattr(doc, "on_session_destroyed"):
+
             def _on_destroy(session_context, view=self):
                 view.cleanup()
+
             doc.on_session_destroyed(_on_destroy)
             self._cleanup_registered = True
             print(f"[GUI] Cleanup registered on doc {id(doc)}")
@@ -106,11 +118,13 @@ class EphysGuiView(param.Parameterized):
         self.log_output.value = ""
 
         initial_mem = psutil.virtual_memory()
-        total_ram = initial_mem.total / (1024 ** 3)
-        current_ram_usage = initial_mem.used / (1024 ** 3)
-        available_ram = initial_mem.available / (1024 ** 3)
+        total_ram = initial_mem.total / (1024**3)
+        current_ram_usage = initial_mem.used / (1024**3)
+        available_ram = initial_mem.available / (1024**3)
         print(f"\nRAM Usage before initialization:")
-        print(f"\tUsed: {current_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {available_ram:.2f}/{total_ram:.2f} GB\n")
+        print(
+            f"\tUsed: {current_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {available_ram:.2f}/{total_ram:.2f} GB\n"
+        )
         with local_log_context(self.log_output):
             error = None
             if self.analyzer_path != "":
@@ -139,10 +153,12 @@ class EphysGuiView(param.Parameterized):
                 self.layout[0] = pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
             else:
                 final_mem = psutil.virtual_memory()
-                final_ram_usage = final_mem.used / (1024 ** 3)
-                final_ram_available = final_mem.available / (1024 ** 3)
+                final_ram_usage = final_mem.used / (1024**3)
+                final_ram_available = final_mem.available / (1024**3)
                 print(f"\nRAM Usage after initialization:")
-                print(f"\tUsed: {final_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {final_ram_available:.2f}/{total_ram:.2f} GB\n")
+                print(
+                    f"\tUsed: {final_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {final_ram_available:.2f}/{total_ram:.2f} GB\n"
+                )
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
@@ -194,11 +210,11 @@ class EphysGuiView(param.Parameterized):
                 curation_dict=curation_dict,
                 mode="web",
                 start_app=False,
-                # for testing
-                skip_extensions=["waveforms", "principal_components"],
                 panel_window_servable=False,
                 verbose=True,
-                layout=aind_layout
+                layout=aind_layout,
+                # UNCOMMENT THIS TO SPEED UP TESTING
+                # skip_extensions=["waveforms", "principal_components"],
             )
             self.win = win
             return win.main_layout
@@ -209,8 +225,8 @@ class EphysGuiView(param.Parameterized):
         """Release resources when the session is closed."""
         print("Cleaning up Ephys GUI resources...")
         initial_mem = psutil.virtual_memory()
-        total_ram = initial_mem.total / (1024 ** 3)
-        current_ram_usage = initial_mem.used / (1024 ** 3)
+        total_ram = initial_mem.total / (1024**3)
+        current_ram_usage = initial_mem.used / (1024**3)
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
         # 1) Release GUI controller references
@@ -251,12 +267,12 @@ class EphysGuiView(param.Parameterized):
         #     print(f"malloc_trim failed: {e}")
 
         final_mem = psutil.virtual_memory()
-        current_ram_usage = final_mem.used / (1024 ** 3)
+        current_ram_usage = final_mem.used / (1024**3)
         print(f"\nRAM Usage after cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
-
 
         # Debug: compare RSS vs OS-reported used
         import os
+
         process = psutil.Process(os.getpid())
         rss = process.memory_info().rss / 1024**2
         print(f"\nProcess RSS: {rss:.1f} MB")
