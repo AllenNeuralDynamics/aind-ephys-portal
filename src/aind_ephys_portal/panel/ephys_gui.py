@@ -50,8 +50,8 @@ ephys.allenneuraldymamics.org/ephys_gui_app?analyzer_path="/path/to/analyzer.zar
 
 # Define the layout for the AIND Ephys GUI
 aind_layout = dict(
-    zone1=["unitlist", "curation", "merge", "spikelist"],
-    zone2=[],
+    zone1=["curation", "merge", "spikelist"],
+    zone2=["unitlist",],
     zone3=["spikeamplitude", "spikedepth", "spikerate", "trace", "tracemap"],
     zone4=[],
     zone5=["probe"],
