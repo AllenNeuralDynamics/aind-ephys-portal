@@ -1,4 +1,8 @@
 #!/bin/sh
+
+# Clean up old logs
+rm -rf /tmp/aind_ephys_logs
+
 panel serve \
     src/aind_ephys_portal/ephys_gui_app.py \
     src/aind_ephys_portal/ephys_portal_app.py \

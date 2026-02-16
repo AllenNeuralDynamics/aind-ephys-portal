@@ -55,31 +55,3 @@ def format_css_background():
     }}
     """
     pn.config.raw_css.append(BACKGROUND_CSS)  # type: ignore
-
-
-class Tee(io.StringIO):
-    def __init__(self, log_output):
-        super().__init__()
-        self.log_output = log_output
-        self._orig_out = None
-        self._orig_err = None
-
-    def __enter__(self):
-        self._orig_out = sys.stdout
-        self._orig_err = sys.stderr
-        sys.stdout = self
-        sys.stderr = self
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        sys.stdout = self._orig_out
-        sys.stderr = self._orig_err
-
-    def write(self, message):
-        if self._orig_out:
-            self._orig_out.write(message)
-        self.log_output.value += message
-
-    def flush(self):
-        if self._orig_out:
-            self._orig_out.flush()

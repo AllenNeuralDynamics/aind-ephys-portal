@@ -102,16 +102,27 @@ def get_raw_asset_by_name(asset_name: str):
 
 
 @pn.cache(ttl=TIMEOUT_1H)
-def get_all_ecephys_derived() -> List[Dict[str, Any]]:
+def get_all_ecephys_derived(additional_includes_in_name : str | None =None) -> List[Dict[str, Any]]:
     """Get a limited set of all records from the database.
 
     Returns
     -------
     list[dict]
         List of records, limited to 50 entries.
+    additional_includes_in_name : str, optional
+        Comma-separated list of additional fields to include in the results, by default None
     """
     filter_query = {"data_description.modality.abbreviation": "ecephys", "data_description.data_level": "derived"}
-    response = client.retrieve_docdb_records(
+    responses = client.retrieve_docdb_records(
         filter_query=filter_query,
     )
-    return response
+    responses_filt = []
+    if additional_includes_in_name:
+        additional_fields = [field.strip() for field in additional_includes_in_name.split(",")]
+        for record in responses:
+            for field in additional_fields:
+                if field in record["name"]:
+                    responses_filt.append(record)
+    else:
+        responses_filt = responses
+    return responses_filt

@@ -1,72 +1,80 @@
 import io
 import sys
-import panel as pn
 import contextvars
+from pathlib import Path
+
+import panel as pn
 
 pn.extension()
 
-_buffers = {}
+LOG_DIR = Path("/tmp/aind_ephys_logs")
 _log_setup = False
 _local_sink = contextvars.ContextVar("local_sink", default=None)
 
 
-def _get_session_id():
-    session_id = getattr(pn.state, "session_id", None)
-    if session_id:
-        return session_id
-    doc = getattr(pn.state, "curdoc", None)
-    if doc and getattr(doc, "session_context", None):
-        return id(doc.session_context)
-    return "no-session"
+def _log_path_for_session(route, session_id):
+    return LOG_DIR / route / str(session_id)
 
 
-def _key(pathname=None, session_id=None):
-    if pathname is None:
-        location = getattr(pn.state, "location", None)
-        pathname = location.pathname if location else "/"
-    if session_id is None:
-        session_id = _get_session_id()
-    return (pathname, session_id)
+def _get_current_log_path():
+    """Get the log path for the current request from curdoc."""
+    try:
+        doc = pn.state.curdoc
+        if doc is not None:
+            route = getattr(doc, "_log_route", None)
+            session_id = getattr(doc, "_log_session_id", None)
+            if route and session_id:
+                return _log_path_for_session(route, session_id)
+    except Exception:
+        pass
+    return None
 
 
-def get_buffer(pathname=None, session_id=None):
-    key = _key(pathname, session_id)
-    if key not in _buffers:
-        _buffers[key] = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-    return _buffers[key]
+def add_session(route, session_id):
+    """Create a log file for this session."""
+    path = _log_path_for_session(route, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text("")
+    return path
 
 
-def list_buffers(skip_routes=None):
+def remove_session(route, session_id):
+    """Remove the log file for this session."""
+    path = _log_path_for_session(route, session_id)
+    if path.exists():
+        path.unlink()
+    # Clean up empty route dir
+    try:
+        if path.parent.exists() and not any(path.parent.iterdir()):
+            path.parent.rmdir()
+    except Exception:
+        pass
+
+
+def set_session_log_path(route, session_id):
+    """No-op kept for compatibility."""
+    pass
+
+
+def list_sessions(skip_routes=None):
+    """Return dict of {(route, session_id): Path} for all active log files."""
     if skip_routes is None:
         skip_routes = []
-    buffer_list = list(_buffers.keys())
-    buffers = {}
-    for key in buffer_list:
-        route, session_id = key
-        if any(s in route for s in skip_routes):
+    sessions = {}
+    if not LOG_DIR.exists():
+        return sessions
+    for route_dir in LOG_DIR.iterdir():
+        if not route_dir.is_dir():
             continue
-        if isinstance(session_id, str) and session_id == "no-session":
+        route = route_dir.name
+        if route in skip_routes:
             continue
-        buffers[key] = _buffers[key]
-    return buffers
-
-
-def remove_buffer(key):
-    return _buffers.pop(key, None)
-
-
-def add_session(session_id, pathname=None):
-    key = _key(pathname=pathname, session_id=session_id)
-    if key not in _buffers:
-        _buffers[key] = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
-    return _buffers[key]
-
-
-def clear_session(session_id):
-    keys = [k for k in _buffers.keys() if k[1] == session_id]
-    for k in keys:
-        _buffers.pop(k, None)
-    return len(keys)
+        for log_file in route_dir.iterdir():
+            if log_file.is_file():
+                session_id = log_file.name
+                sessions[(route, session_id)] = log_file
+    return sessions
 
 
 class MultiSessionTee(io.TextIOBase):
@@ -76,14 +84,22 @@ class MultiSessionTee(io.TextIOBase):
     def write(self, data):
         self.original.write(data)
 
-        # Global per-session buffer
-        buf = get_buffer()
-        buf.value = buf.value + data
+        # Write to session log file (from curdoc)
+        path = _get_current_log_path()
+        if path is not None and path.exists():
+            try:
+                with open(path, "a") as f:
+                    f.write(data)
+            except Exception:
+                pass
 
         # Optional local sink (e.g., GUI init panel)
         sink = _local_sink.get()
         if sink is not None:
-            sink.value = sink.value + data
+            try:
+                sink.value = sink.value + data
+            except Exception:
+                pass
 
         return len(data)
 
@@ -109,6 +125,8 @@ def setup_logging():
     global _log_setup
     if _log_setup:
         return
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     sys.stdout = MultiSessionTee(sys.stdout)
     sys.stderr = MultiSessionTee(sys.stderr)
     _log_setup = True
+

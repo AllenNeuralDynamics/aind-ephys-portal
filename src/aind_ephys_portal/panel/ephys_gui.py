@@ -10,15 +10,12 @@ pn.extension("tabulator", "gridstack")
 
 
 from spikeinterface_gui import run_mainwindow
-from spikeinterface_gui.launcher import instantiate_analyzer_and_recording
 
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 from spikeinterface.curation import validate_curation_dict
-from spikeinterface_gui.curation_tools import empty_curation_data, default_label_definitions
 
 from aind_ephys_portal.panel.logging import setup_logging, local_log_context
-from aind_ephys_portal.panel.utils import Tee
 
 
 displayed_unit_properties = ["decoder_label", "default_qc", "firing_rate", "y", "snr", "amplitude_median", "isi_violation_ratio"]
@@ -107,16 +104,19 @@ class EphysGuiView(param.Parameterized):
 
         self.layout[0] = self.loading_banner
         self.log_output.value = ""
+
+        initial_mem = psutil.virtual_memory()
+        total_ram = initial_mem.total / (1024 ** 3)
+        current_ram_usage = initial_mem.used / (1024 ** 3)
+        available_ram = initial_mem.available / (1024 ** 3)
+        print(f"\nRAM Usage before initialization:")
+        print(f"\tUsed: {current_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {available_ram:.2f}/{total_ram:.2f} GB\n")
         with local_log_context(self.log_output):
             error = None
             if self.analyzer_path != "":
                 try:
                     t_start = time.perf_counter()
-                    initial_mem = psutil.virtual_memory()
-                    total_ram = initial_mem.total / (1024 ** 3)
-                    current_ram_usage = initial_mem.used / (1024 ** 3)
                     print(f"Initializing Ephys GUI")
-                    print(f"\nRAM Usage before initialization: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
                     print(f"\nLoading with the following paths:")
                     print(f"Analyzer path:\n{self.analyzer_path}\nRecording path:\n{self.recording_path}")
@@ -129,9 +129,6 @@ class EphysGuiView(param.Parameterized):
                     t_stop = time.perf_counter()
                     print(f"Initialization time: {t_stop - t_start:.2f} seconds")
 
-                    final_mem = psutil.virtual_memory()
-                    final_ram_usage = final_mem.used / (1024 ** 3)
-                    print(f"\nRAM Usage after initialization: {final_ram_usage:.2f} / {total_ram:.2f} GB\n")
                 except Exception as e:
                     error = e
             else:
@@ -140,6 +137,12 @@ class EphysGuiView(param.Parameterized):
             if error is not None:
                 print(f"Error during initialization: {error}")
                 self.layout[0] = pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
+            else:
+                final_mem = psutil.virtual_memory()
+                final_ram_usage = final_mem.used / (1024 ** 3)
+                final_ram_available = final_mem.available / (1024 ** 3)
+                print(f"\nRAM Usage after initialization:")
+                print(f"\tUsed: {final_ram_usage:.2f}/{total_ram:.2f} GB\n\tAvailable: {final_ram_available:.2f}/{total_ram:.2f} GB\n")
 
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):

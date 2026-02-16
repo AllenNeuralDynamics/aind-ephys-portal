@@ -79,7 +79,6 @@ class EphysPortal:
     def update_results(self, event):
         """Update the results panel with the current search results."""
         print("Updating search results...")
-        print(event)
         if event is None:
             df = self.search_options.df
         elif event.name == "clicks":
@@ -183,10 +182,12 @@ class EphysPortal:
             pn.pane.Markdown("## Postprocessed Streams", styles={"text-align": "left"}),
             self.streams_panel,
             min_width=900,
+            max_width=1400,
+            sizing_mode="stretch_width",
             styles=OUTER_STYLE,
             align="center",
         )
-        display = pn.Row(pn.HSpacer(), col, pn.HSpacer())
+        display = pn.Row(pn.HSpacer(max_width=50), col, pn.HSpacer(max_width=50))
 
         return display
 
@@ -209,8 +210,8 @@ class SearchOptions(param.Parameterized):
         data = []
         try:
             # Get initial data from database
-            self.all_records = get_all_ecephys_derived()
-            print(f"Loaded {len(self.all_records)} records.")
+            self.all_records = get_all_ecephys_derived(additional_includes_in_name="sorted")
+            print(f"Loaded {len(self.all_records)} 'sorted' records.")
             # Process records into a list of dictionaries
             for record in self.all_records:
                 r = {
@@ -258,8 +259,10 @@ class SearchOptions(param.Parameterized):
 
         # Search for records matching the text filter
         try:
-            # Make sure we're returning a DataFrame, not a Series
+            # Search first in the 'name' column. If no matches, we check for the dataset ID
             mask = self.df["name"].str.contains(text_filter, case=False)
+            if not mask.any():
+                mask = self.df["id"].str.contains(text_filter, case=False)
             df_filtered = self.df[mask]
             return df_filtered
         except Exception as e:
