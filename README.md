@@ -24,10 +24,24 @@ pip install -e .
 
 ## Usage
 
-To run the Ephys Portal:
+To run the Ephys Portal you can either use tha `launch.sh` script:
 
 ```bash
-panel serve src/aind_ephys_portal/ephys_gui_app.py src/aind_ephys_portal/ephys_launcher_app.py src/aind_ephys_portal/ephys_monitor_app.py src/aind_ephys_portal/ephys_log_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --keep-alive 10000 --index ephys_portal_app.py --num-procs 4 --warm
+bash launch.sh
+```
+
+or serve panel apps directly:
+
+```bash
+panel serve \
+    src/aind_ephys_portal/ephys_gui_app.py \
+    src/aind_ephys_portal/ephys_launcher_app.py \
+    src/aind_ephys_portal/ephys_monitor_app.py \
+    src/aind_ephys_portal/ephys_log_app.py \
+    --setup src/aind_ephys_portal/setup.py \
+    --static-dirs images=src/aind_ephys_portal/images \
+    --index ephys_portal_app.py \
+    --num-procs 4
 ```
 
 This will start a Panel server and make the application available in your web browser.

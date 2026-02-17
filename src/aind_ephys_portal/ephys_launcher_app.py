@@ -34,6 +34,13 @@ class EphysLauncher:
             sizing_mode="stretch_width",
         )
 
+        self.fast_mode_checkbox = pn.widgets.Checkbox(
+            name="Enable Fast Mode (skip waveforms and PCs)",
+            value=False,
+            height=30,
+            sizing_mode="stretch_width",
+        )
+
         self.link_pane = pn.pane.HTML("No link generated yet.", sizing_mode="stretch_width")
         self.url_output = pn.widgets.TextInput(
             name="GUI URL",
@@ -48,7 +55,7 @@ class EphysLauncher:
             pn.pane.Markdown("## AIND Ephys Launcher"),
             self.analyzer_input,
             self.recording_input,
-            self.generate_button,
+            pn.Row(self.generate_button, self.fast_mode_checkbox, sizing_mode="stretch_width"),
             self.link_pane,
             self.url_output,
             sizing_mode="stretch_width",
@@ -63,6 +70,8 @@ class EphysLauncher:
         analyzer_path_q = urllib.parse.quote(analyzer_path, safe="")
         recording_path_q = urllib.parse.quote(recording_path, safe="") if recording_path else ""
         path = EPHYSGUI_LINK_PREFIX.format(analyzer_path_q, recording_path_q)
+        if self.fast_mode_checkbox.value:
+            path += "&fast_mode=true"
 
         location = pn.state.location
         if location is not None:

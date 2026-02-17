@@ -19,15 +19,19 @@ class Settings(param.Parameterized):
 
     analyzer_path = param.String(default="")
     recording_path = param.String(default="")
+    fast_mode = param.Boolean(
+        default=False,
+        doc="Whether to enable fast mode (skips waveforms and principal components)"
+    )
 
 
 settings = Settings()
-pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path"})
+pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "fast_mode": "fast_mode"})
 
 # Manually decode stream_name after syncing
 settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
 settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
-ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path)
+ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, fast_mode=settings.fast_mode)
 
 ephys_gui.panel().servable(title="AIND Ephys GUI")

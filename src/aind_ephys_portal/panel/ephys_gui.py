@@ -50,9 +50,9 @@ ephys.allenneuraldymamics.org/ephys_gui_app?analyzer_path="/path/to/analyzer.zar
 
 # Define the layout for the AIND Ephys GUI
 aind_layout = dict(
-    zone1=["curation", "merge", "spikelist"],
-    zone2=["unitlist",],
-    zone3=["spikeamplitude", "spikedepth", "spikerate", "trace", "tracemap"],
+    zone1=["curation", "spikelist"],
+    zone2=["unitlist", "merge"],
+    zone3=["spikeamplitude", "amplitudescalings", "spikedepth", "spikerate", "trace", "tracemap"],
     zone4=[],
     zone5=["probe"],
     zone6=["ndscatter", "similarity"],
@@ -63,7 +63,7 @@ aind_layout = dict(
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, **params):
+    def __init__(self, analyzer_path, recording_path, fast_mode=False, **params):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -71,6 +71,7 @@ class EphysGuiView(param.Parameterized):
 
         self.analyzer_path = analyzer_path
         self.recording_path = recording_path
+        self.fast_mode = fast_mode
         self.analyzer = None
         self._cleanup_registered = False
 
@@ -203,6 +204,11 @@ class EphysGuiView(param.Parameterized):
                 print(f"Curated dictionary is invalid: {e}")
                 curation_dict = None
 
+            if self.fast_mode:
+                skip_extensions = ["waveforms", "principal_components"]
+            else:
+                skip_extensions = None
+
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
@@ -213,8 +219,7 @@ class EphysGuiView(param.Parameterized):
                 panel_window_servable=False,
                 verbose=True,
                 layout=aind_layout,
-                # UNCOMMENT THIS TO SPEED UP TESTING
-                # skip_extensions=["waveforms", "principal_components"],
+                skip_extensions=skip_extensions,
             )
             self.win = win
             return win.main_layout
