@@ -2,7 +2,6 @@ import psutil
 import param
 import time
 import gc
-import ctypes
 
 import panel as pn
 
@@ -264,25 +263,11 @@ class EphysGuiView(param.Parameterized):
         gc.collect()
         gc.collect()
 
-        # 5) Force glibc to return freed memory to OS
-        # try:
-        #     ctypes.CDLL("libc.so.6").malloc_trim(0)
-        #     print("malloc_trim: freed memory returned to OS.")
-        # except Exception as e:
-        #     print(f"malloc_trim failed: {e}")
 
         final_mem = psutil.virtual_memory()
         current_ram_usage = final_mem.used / (1024**3)
         print(f"\nRAM Usage after cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
-        # Debug: compare RSS vs OS-reported used
-        import os
-
-        process = psutil.Process(os.getpid())
-        rss = process.memory_info().rss / 1024**2
-        print(f"\nProcess RSS: {rss:.1f} MB")
-        print(f"OS used (includes page cache): {psutil.virtual_memory().used / 1024**2:.1f} MB")
-        print(f"OS available: {psutil.virtual_memory().available / 1024**2:.1f} MB")
 
     def panel(self):
         """Return the panel layout"""
