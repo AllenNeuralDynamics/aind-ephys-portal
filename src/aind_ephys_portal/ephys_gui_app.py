@@ -3,8 +3,8 @@
 import urllib
 import param
 
-
 import panel as pn
+
 pn.extension("tabulator", "gridstack")
 
 # Import for side effects: registers SpikeInterface GUI custom Panel/Bokeh models/resources
@@ -19,16 +19,19 @@ class Settings(param.Parameterized):
 
     analyzer_path = param.String(default="")
     recording_path = param.String(default="")
+    fast_mode = param.Boolean(
+        default=False,
+        doc="Whether to enable fast mode (skips waveforms and principal components)"
+    )
 
 
 settings = Settings()
-pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path"})
+pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "fast_mode": "fast_mode"})
 
 # Manually decode stream_name after syncing
 settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
 settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
-ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path)
-app_layout = pn.Column(ephys_gui.layout, sizing_mode="stretch_both", min_height=600)
+ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, fast_mode=settings.fast_mode)
 
-app_layout.servable(title="AIND Ephys GUI")
+ephys_gui.panel().servable(title="AIND Ephys GUI")
