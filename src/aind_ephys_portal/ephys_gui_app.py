@@ -35,3 +35,7 @@ settings.recording_path = urllib.parse.unquote(settings.recording_path)
 ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, fast_mode=settings.fast_mode)
 
 ephys_gui.panel().servable(title="AIND Ephys GUI")
+
+# Don't keep a module-level reference to the heavy GUI object.
+# The servable layout is now owned by Panel/Bokeh's document.
+del ephys_gui

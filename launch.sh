@@ -12,4 +12,4 @@ panel serve \
     --static-dirs images=src/aind_ephys_portal/images \
     --check-unused-sessions 2000 \
     --unused-session-lifetime 5000 \
-    --num-procs 4
+    --num-threads 8
