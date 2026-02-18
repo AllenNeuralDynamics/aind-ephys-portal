@@ -1,7 +1,9 @@
+import ctypes
 import psutil
 import param
 import time
 import gc
+from copy import deepcopy
 
 import panel as pn
 
@@ -59,6 +61,13 @@ aind_layout = dict(
     zone8=["correlogram", "metrics", "mainsettings"],
 )
 
+def _malloc_trim():
+    """Force glibc to return freed memory to the OS (Linux only)."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
 
 class EphysGuiView(param.Parameterized):
 
@@ -73,6 +82,7 @@ class EphysGuiView(param.Parameterized):
         self.fast_mode = fast_mode
         self.analyzer = None
         self._cleanup_registered = False
+        self._init_cb = None
 
         self.spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
         self.log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
@@ -102,9 +112,15 @@ class EphysGuiView(param.Parameterized):
             return
         doc = pn.state.curdoc
         if doc is not None and hasattr(doc, "on_session_destroyed"):
+            # Use a weak-like reference pattern: store the id and look up via the doc
+            # to avoid the closure preventing GC of self
+            view_ref = [self]  # mutable container we can clear
 
-            def _on_destroy(session_context, view=self):
-                view.cleanup()
+            def _on_destroy(session_context):
+                view = view_ref[0]
+                if view is not None:
+                    view.cleanup()
+                    view_ref[0] = None  # break the reference
 
             doc.on_session_destroyed(_on_destroy)
             self._cleanup_registered = True
@@ -188,7 +204,7 @@ class EphysGuiView(param.Parameterized):
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
-            curation_dict = default_curation_dict
+            curation_dict = deepcopy(default_curation_dict)
             curation_dict["unit_ids"] = self.analyzer.unit_ids
             if "decoder_label" in self.analyzer.sorting.get_property_keys():
                 decoder_labels = self.analyzer.get_sorting_property("decoder_label")
@@ -235,19 +251,17 @@ class EphysGuiView(param.Parameterized):
 
         # 1) Release GUI controller references
         if self.win is not None:
+            self.win.controller.analyzer = None
+            del self.win.controller.analyzer
+            self.win.controller = None
+            del self.win.controller
+            self.win = None
             del self.win
 
-        # 2) Close zarr store explicitly
+        # 2) Delete the analyzer reference to release memory-mapped files and other resources
         if self.analyzer is not None:
-            # Try to close the underlying zarr store
-            zarr_root = getattr(self.analyzer, "sorting_analyzer", None) or self.analyzer
-            store = getattr(zarr_root, "_root", None)
-            if store is not None:
-                inner_store = getattr(store, "store", None)
-                if inner_store is not None and hasattr(inner_store, "close"):
-                    inner_store.close()
-                    print("Zarr store closed.")
             self.analyzer = None
+            del self.analyzer
             print("Analyzer resources released.")
 
         # 3) Clear layout references
@@ -262,6 +276,9 @@ class EphysGuiView(param.Parameterized):
         # 4) Force garbage collection (two passes for ref cycles)
         gc.collect()
         gc.collect()
+
+        # 5) Force glibc to return freed memory to OS
+        _malloc_trim()
 
 
         final_mem = psutil.virtual_memory()

@@ -31,9 +31,9 @@ RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout c165cfe91ea8dcfdc69836184db9827304d357f9 && \
+    git checkout b8d461ce5e5178880a32fd25cb5c87b94dab86e1 && \
     pip install . && cd ..
 
 
 EXPOSE 8000
-ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_gui_app.py src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_launcher_app.py src/aind_ephys_portal/ephys_monitor_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --index ephys_portal_app.py --check-unused-sessions 2000 --unused-session-lifetime 5000 --num-procs 4"]
+ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_gui_app.py src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_launcher_app.py src/aind_ephys_portal/ephys_monitor_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --index ephys_portal_app.py --check-unused-sessions 2000 --unused-session-lifetime 5000 --num-threads 8"]
