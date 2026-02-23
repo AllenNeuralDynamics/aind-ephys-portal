@@ -112,7 +112,7 @@ class EphysGuiView(param.Parameterized):
                 sizing_mode="stretch_both",
             )
 
-    def add_post_message_listener(self):
+    def create_post_message_listener(self):
         if self.identifier is not None:
             listener = PostMessageListener()
             listener.on_msg(self._set_curation_data_from_message)
@@ -120,8 +120,7 @@ class EphysGuiView(param.Parameterized):
             listener = None
         return listener
 
-    def create_curation_trigger(self):
-        # Create objects to submit and listen
+    def create_submit_trigger(self):
         submit_trigger = pn.widgets.TextInput(value="", visible=False)
         # Add JavaScript callback that triggers when the TextInput value changes
         submit_trigger.jscallback(
@@ -234,9 +233,9 @@ class EphysGuiView(param.Parameterized):
                     if self.identifier is not None:
                         print(f"\nSetting up bi-directional communication with identifier: {self.identifier}")
                         # Add custom curation callback to send data to parent window
-                        self.submit_trigger = self.create_curation_trigger()
+                        self.submit_trigger = self.create_submit_trigger()
                         # Add postMessage listener to receive data from parent window
-                        self.listener = self.add_post_message_listener()
+                        self.listener = self.create_post_message_listener()
 
                     self.win_layout = self._create_main_window()
                     self.layout[0] = self.win_layout
