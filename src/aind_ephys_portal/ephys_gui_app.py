@@ -12,6 +12,14 @@ import spikeinterface_gui.utils_panel  # noqa: F401
 
 from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 
+def _get_arg(name: str, default: str = "") -> str:
+    """Read a query-parameter from the raw HTTP request."""
+    val = pn.state.session_args.get(name, [default.encode()])
+    if isinstance(val, list):
+        val = val[0]
+    if isinstance(val, bytes):
+        val = val.decode()
+    return val
     
 
 # State sync
@@ -30,13 +38,16 @@ class Settings(param.Parameterized):
 settings = Settings()
 pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "identifier": "identifier", "fast_mode": "fast_mode"})
 
-# Manually decode stream_name after syncing
-settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
-settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
-print(settings)
+print("session_args:", {k: v for k, v in pn.state.session_args.items()})
 
-ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, identifier=settings.identifier, fast_mode=settings.fast_mode)
+
+analyzer_path = urllib.parse.unquote(_get_arg("analyzer_path"))
+recording_path = urllib.parse.unquote(_get_arg("recording_path"))
+identifier = _get_arg("identifier")
+fast_mode = _get_arg("fast_mode", "false").lower() in ("true", "1", "yes")
+
+ephys_gui = EphysGuiView(analyzer_path=analyzer_path, recording_path=recording_path, identifier=identifier, fast_mode=fast_mode)
 
 ephys_gui.panel().servable(title="AIND Ephys GUI")
 

@@ -1,4 +1,5 @@
 import ctypes
+import json
 import psutil
 import param
 import time
@@ -84,7 +85,6 @@ class EphysGuiView(param.Parameterized):
             identifier = None
         self.identifier = identifier
         self.fast_mode = fast_mode
-        print("Fast mode:", self.fast_mode)
         self.analyzer = None
         self._cleanup_registered = False
         self._init_cb = None
@@ -126,32 +126,30 @@ class EphysGuiView(param.Parameterized):
         submit_trigger.jscallback(
             value="""
             // Extract just the JSON data (remove timestamp suffix)
-            const fullValue = cb_obj.value;
-            const lastUnderscore = fullValue.lastIndexOf('_');
-            const dataStr = lastUnderscore > 0 ? fullValue.substring(0, lastUnderscore) : fullValue;
+            const dataStr = cb_obj.value;
 
-            if (dataStr && dataStr.length > 0) {
-                try {
+            if (dataStr && dataStr.length > 0) {{
+                try {{
                     const data = JSON.parse(dataStr);
                     console.log('Sending data to parent:', data);
-                    parent.postMessage({
+                    parent.postMessage({{
                             type: 'panel-data',
-                            identifier: '%s',
+                            identifier: '{identifier}',
                             data: data
-                        },
+                        }},
                     '*');
                     console.log('Data sent successfully to parent window');
-                } catch (error) {
+                }} catch (error) {{
                     console.error('Error sending data to parent:', error);
-                }
-            }
-            """.format(self.identifier)
+                }}
+            }}
+            """.format(identifier=self.identifier)
         )
         return submit_trigger
 
 
     def _curation_callback(self, curation_data):
-        self.submit_trigger.value = curation_data + f"_{int(time.time() * 1000)}"
+        self.submit_trigger.value = json.dumps(curation_data)
 
     def _set_curation_data_from_message(self, event):
         """
@@ -164,12 +162,19 @@ class EphysGuiView(param.Parameterized):
         }
         """
         msg = event.data
+        print(f"Received message: {msg}")
         payload = (msg or {}).get("payload", {})
-        curation_data = payload.get("data", None)
         identifier = payload.get("identifier", None)
         if identifier != self.identifier:
             print(f"Received message for identifier {identifier}, but current identifier is {self.identifier}. Ignoring.")
             return
+
+        data_type = payload.get("type", None)
+        if data_type != "curation-data":
+            print(f"Received message with type {data_type}, but expected 'curation-data'. Ignoring.")
+            return
+
+        curation_data = payload.get("data", None)
 
         # Optional: validate basic structure
         if not isinstance(curation_data, dict):

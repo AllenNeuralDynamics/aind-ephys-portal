@@ -62,33 +62,46 @@ class ParentPostMessageListener(ReactComponent):
 class IFramePostMessageSender(ReactComponent):
     """
     Invisible component that, whenever *message_json* changes, posts a
-    ``curation-data`` message into the iframe whose id matches *target_iframe_id*.
+    ``curation-data`` message into all iframes (including Shadow DOMs) on the page.
     """
 
     message_json = param.String(default="")
-    target_iframe_id = param.String(default="")
 
     _esm = """
     export function render({ model }) {
       const [messageJson] = model.useState("message_json");
-      const [targetId]    = model.useState("target_iframe_id");
+
+      function findIframes(root) {
+        const results = [];
+        // Direct iframes under this root
+        root.querySelectorAll("iframe").forEach((el) => results.push(el));
+        // Recurse into shadow roots
+        root.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot) {
+            findIframes(el.shadowRoot).forEach((f) => results.push(f));
+          }
+        });
+        return results;
+      }
 
       React.useEffect(() => {
         if (!messageJson) return;
 
-        // Strip the timestamp suffix we append to force change detection
         const lastUnderscore = messageJson.lastIndexOf("_");
         const raw = lastUnderscore > 0 ? messageJson.substring(0, lastUnderscore) : messageJson;
         if (!raw) return;
 
         try {
           const parsed = JSON.parse(raw);
-          const iframe = document.getElementById(targetId);
-          if (iframe && iframe.contentWindow) {
-            iframe.contentWindow.postMessage(parsed, "*");
-            console.log(`[parent] Sent to iframe#${targetId}:`, parsed);
-          } else {
-            console.warn(`[parent] iframe#${targetId} not found`);
+          const iframes = findIframes(document);
+          iframes.forEach((iframe) => {
+            if (iframe.contentWindow) {
+              iframe.contentWindow.postMessage(parsed, "*");
+              console.log(`[parent] Sent to iframe#${iframe.id || '(no id)'}:`, parsed);
+            }
+          });
+          if (iframes.length === 0) {
+            console.warn("[parent] No iframes found on the page (including shadow DOMs)");
           }
         } catch (err) {
           console.error("[parent] JSON parse error:", err);
@@ -106,7 +119,7 @@ def iframe_url(identifier: str) -> str:
     return (
         f"http://localhost:{EPHYS_GUI_PORT}/ephys_gui_app"
         f"?analyzer_path={urllib.parse.quote(ANALYZER_PATH)}&"
-        f"recording_path=&identifier={identifier}&fast_mode=true"
+        f"identifier={identifier}&fast_mode=true"
     )
 
 
@@ -120,15 +133,15 @@ iframe_0000 = pn.pane.HTML(
     f'<iframe id="iframe-0000" src="{iframe_url("0000")}" '
     f'style="width:100%;height:100%;border:2px solid #2A7DE1;border-radius:6px;" '
     f'allow="cross-origin-isolated"></iframe>',
-    sizing_mode="stretch_both",
-    min_height=500,
+    height=600,
+    sizing_mode="stretch_width",
 )
 iframe_0001 = pn.pane.HTML(
     f'<iframe id="iframe-0001" src="{iframe_url("0001")}" '
     f'style="width:100%;height:100%;border:2px solid #1D8649;border-radius:6px;" '
     f'allow="cross-origin-isolated"></iframe>',
-    sizing_mode="stretch_both",
-    min_height=500,
+    height=600,
+    sizing_mode="stretch_width",
 )
 
 # Received-messages log
@@ -147,7 +160,8 @@ listener = ParentPostMessageListener()
 
 def _on_receive(msg):
     """Callback fired when a panel-data message arrives from any iframe."""
-    payload = msg.get("payload", {})
+    data = msg.data
+    payload = data.get("payload", {})
     identifier = payload.get("identifier", "???")
     data = payload.get("data", "")
     ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -168,9 +182,10 @@ target_select = pn.widgets.Select(
 
 send_textarea = pn.widgets.TextAreaInput(
     name="✏️  Curation data to send (JSON)",
-    value='{"manual_labels": [{"unit_id": 0, "quality": ["good"]}]}',
-    sizing_mode="stretch_width",
-    min_height=120,
+    value="",
+    sizing_mode="stretch_both",
+    min_height=200,
+    max_length=500000,
 )
 
 send_button = pn.widgets.Button(name="Send ➤", button_type="primary", width=120)
@@ -184,13 +199,15 @@ def _on_send(event):
     """Build a curation-data postMessage payload and push it into the sender."""
     identifier = target_select.value
     raw = send_textarea.value.strip()
-    if not raw:
-        return
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        received_log.value = f"⚠️  Invalid JSON: {exc}\n" + received_log.value
-        return
+
+    if len(raw) == 0:
+        data = {}
+    else:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            received_log.value = f"⚠️  Invalid JSON: {exc}\n" + received_log.value
+            return
 
     envelope = {
         "type": "curation-data",
@@ -198,7 +215,6 @@ def _on_send(event):
         "data": data,
     }
 
-    sender.target_iframe_id = f"iframe-{identifier}"
     # Append a unique counter so the param change always fires
     _send_counter[0] += 1
     sender.message_json = json.dumps(envelope) + f"_{_send_counter[0]}"
@@ -221,23 +237,22 @@ header = pn.pane.Markdown(
     sizing_mode="stretch_width",
 )
 
-iframes_row = pn.Row(
-    pn.Column("### iframe 0000", iframe_0000, sizing_mode="stretch_both"),
-    pn.Column("### iframe 0001", iframe_0001, sizing_mode="stretch_both"),
+iframes_row = pn.Tabs(
+    ("### iframe 0000", iframe_0000),
+    ("### iframe 0001", iframe_0001),
     sizing_mode="stretch_both",
-    min_height=500,
 )
 
 send_panel = pn.Column(
     pn.Row(target_select, send_button, align="end"),
     send_textarea,
-    sizing_mode="stretch_width",
+    sizing_mode="stretch_both",
 )
 
 comm_row = pn.Row(
     pn.Column("### Send", send_panel, sizing_mode="stretch_both"),
     pn.Column("### Receive", received_log, sizing_mode="stretch_both"),
-    sizing_mode="stretch_width",
+    sizing_mode="stretch_both",
     min_height=250,
 )
 
