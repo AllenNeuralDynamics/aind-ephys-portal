@@ -4,7 +4,7 @@ from panel.param import param
 from panel.custom import ReactComponent
 
 
-EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}"
+EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}&preload_curation=true"
 
 
 AIND_COLORS = colors = {

@@ -73,7 +73,7 @@ def _malloc_trim():
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, identifier=None, fast_mode=False, **params):
+    def __init__(self, analyzer_path, recording_path, identifier=None, fast_mode=False, preload_curation=False, **params):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -85,6 +85,7 @@ class EphysGuiView(param.Parameterized):
             identifier = None
         self.identifier = identifier
         self.fast_mode = fast_mode
+        self.preload_curation = preload_curation
         self.analyzer = None
         self._cleanup_registered = False
         self._init_cb = None
@@ -133,7 +134,7 @@ class EphysGuiView(param.Parameterized):
                     const data = JSON.parse(dataStr);
                     console.log('Sending data to parent:', data);
                     parent.postMessage({{
-                            type: 'panel-data',
+                            type: 'curation-data',
                             identifier: '{identifier}',
                             data: data
                         }},
@@ -292,19 +293,22 @@ class EphysGuiView(param.Parameterized):
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
-            curation_dict = deepcopy(default_curation_dict)
-            curation_dict["unit_ids"] = self.analyzer.unit_ids
-            if "decoder_label" in self.analyzer.sorting.get_property_keys():
-                decoder_labels = self.analyzer.get_sorting_property("decoder_label")
-                noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
-                curation_dict["removed"] = list(noise_units)
-                for unit_id in noise_units:
-                    curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
+            if self.preload_curation:
+                curation_dict = deepcopy(default_curation_dict)
+                curation_dict["unit_ids"] = self.analyzer.unit_ids
+                if "decoder_label" in self.analyzer.sorting.get_property_keys():
+                    decoder_labels = self.analyzer.get_sorting_property("decoder_label")
+                    noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
+                    curation_dict["removed"] = list(noise_units)
+                    for unit_id in noise_units:
+                        curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
 
-            try:
-                validate_curation_dict(curation_dict)
-            except ValueError as e:
-                print(f"Curated dictionary is invalid: {e}")
+                try:
+                    validate_curation_dict(curation_dict)
+                except ValueError as e:
+                    print(f"Curated dictionary is invalid: {e}")
+                    curation_dict = None
+            else:
                 curation_dict = None
 
             if self.fast_mode:

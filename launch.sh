@@ -1,5 +1,7 @@
 #!/bin/sh
 
+PORT=${1:-5006}
+
 # Clean up old logs
 rm -rf /tmp/aind_ephys_logs
 
@@ -12,4 +14,5 @@ panel serve \
     --static-dirs images=src/aind_ephys_portal/images \
     --check-unused-sessions 2000 \
     --unused-session-lifetime 5000 \
+    --port $PORT \
     --num-threads 8

@@ -30,11 +30,11 @@ IDENTIFIERS = ["0000", "0001"]
 
 class ParentPostMessageListener(ReactComponent):
     """
-    Listens on the *parent* window for postMessage events of type ``panel-data``
+    Listens on the *parent* window for postMessage events of type ``curation-data``
     sent by the embedded ephys_gui_app iframes and forwards them to Python.
     """
 
-    accept_type = param.String(default="panel-data")
+    accept_type = param.String(default="curation-data")
 
     _esm = """
     export function render({ model }) {
@@ -159,7 +159,7 @@ listener = ParentPostMessageListener()
 
 
 def _on_receive(msg):
-    """Callback fired when a panel-data message arrives from any iframe."""
+    """Callback fired when a curation-data message arrives from any iframe."""
     data = msg.data
     payload = data.get("payload", {})
     identifier = payload.get("identifier", "???")

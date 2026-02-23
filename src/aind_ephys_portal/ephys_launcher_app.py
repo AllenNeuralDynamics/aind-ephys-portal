@@ -41,6 +41,13 @@ class EphysLauncher:
             sizing_mode="stretch_width",
         )
 
+        self.preload_curation = pn.widgets.Checkbox(
+            name="Preload Curation",
+            value=True,
+            height=30,
+            sizing_mode="stretch_width",
+        )
+
         self.link_pane = pn.pane.HTML("No link generated yet.", sizing_mode="stretch_width")
         self.url_output = pn.widgets.TextInput(
             name="GUI URL",
@@ -55,7 +62,7 @@ class EphysLauncher:
             pn.pane.Markdown("## AIND Ephys Launcher"),
             self.analyzer_input,
             self.recording_input,
-            pn.Row(self.generate_button, self.fast_mode_checkbox, sizing_mode="stretch_width"),
+            pn.Row(self.generate_button, self.fast_mode_checkbox, self.preload_curation, sizing_mode="stretch_width"),
             self.link_pane,
             self.url_output,
             sizing_mode="stretch_width",
@@ -72,6 +79,8 @@ class EphysLauncher:
         path = EPHYSGUI_LINK_PREFIX.format(analyzer_path_q, recording_path_q)
         if self.fast_mode_checkbox.value:
             path += "&fast_mode=true"
+        if self.preload_curation.value:
+            path += "&preload_curation=true"
 
         location = pn.state.location
         if location is not None:
