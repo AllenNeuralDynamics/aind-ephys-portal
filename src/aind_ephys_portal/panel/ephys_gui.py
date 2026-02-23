@@ -1,4 +1,5 @@
 import ctypes
+import json
 import psutil
 import param
 import time
@@ -17,6 +18,7 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.curation import validate_curation_dict
 
 from aind_ephys_portal.panel.logging import setup_logging, local_log_context
+from aind_ephys_portal.panel.utils import PostMessageListener
 
 
 displayed_unit_properties = [
@@ -71,7 +73,7 @@ def _malloc_trim():
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, fast_mode=False, **params):
+    def __init__(self, analyzer_path, recording_path, identifier=None, fast_mode=False, preload_curation=False, **params):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -79,7 +81,11 @@ class EphysGuiView(param.Parameterized):
 
         self.analyzer_path = analyzer_path
         self.recording_path = recording_path
+        if identifier is not None and identifier == "":
+            identifier = None
+        self.identifier = identifier
         self.fast_mode = fast_mode
+        self.preload_curation = preload_curation
         self.analyzer = None
         self._cleanup_registered = False
         self._init_cb = None
@@ -105,6 +111,76 @@ class EphysGuiView(param.Parameterized):
                 pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
+
+    def create_post_message_listener(self):
+        if self.identifier is not None:
+            listener = PostMessageListener()
+            listener.on_msg(self._set_curation_data_from_message)
+        else:
+            listener = None
+        return listener
+
+    def create_submit_trigger(self):
+        submit_trigger = pn.widgets.TextInput(value="", visible=False)
+        # Add JavaScript callback that triggers when the TextInput value changes
+        submit_trigger.jscallback(
+            value="""
+            // Extract just the JSON data (remove timestamp suffix)
+            const dataStr = cb_obj.value;
+
+            if (dataStr && dataStr.length > 0) {{
+                try {{
+                    const data = JSON.parse(dataStr);
+                    console.log('Sending data to parent:', data);
+                    parent.postMessage({{
+                            type: 'curation-data',
+                            identifier: '{identifier}',
+                            data: data
+                        }},
+                    '*');
+                    console.log('Data sent successfully to parent window');
+                }} catch (error) {{
+                    console.error('Error sending data to parent:', error);
+                }}
+            }}
+            """.format(identifier=self.identifier)
+        )
+        return submit_trigger
+
+
+    def _curation_callback(self, curation_data):
+        self.submit_trigger.value = json.dumps(curation_data)
+
+    def _set_curation_data_from_message(self, event):
+        """
+        Handler for PostMessageListener.on_msg.
+
+        event.data is whatever the JS side passed to model.send_msg(...).
+        Expected shape:
+        {
+            "payload": {"type": "curation-data", "identifier": "<identifier>", "data": <curation_dict>},
+        }
+        """
+        msg = event.data
+        print(f"Received message: {msg}")
+        payload = (msg or {}).get("payload", {})
+        identifier = payload.get("identifier", None)
+        if identifier != self.identifier:
+            print(f"Received message for identifier {identifier}, but current identifier is {self.identifier}. Ignoring.")
+            return
+
+        data_type = payload.get("type", None)
+        if data_type != "curation-data":
+            print(f"Received message with type {data_type}, but expected 'curation-data'. Ignoring.")
+            return
+
+        curation_data = payload.get("data", None)
+
+        # Optional: validate basic structure
+        if not isinstance(curation_data, dict):
+            print("Invalid curation_data type:", type(curation_data), curation_data)
+            return
+        self.sigui_win.set_external_curation(curation_data)
 
     def _register_cleanup(self):
         """Register cleanup on the current document. Must be called from within the session."""
@@ -153,8 +229,20 @@ class EphysGuiView(param.Parameterized):
                     self._initialize_analyzer()
                     if self.recording_path != "":
                         self._set_processed_recording()
-                    win = self._create_main_window()
-                    self.layout[0] = win
+
+                    if self.identifier is not None:
+                        print(f"\nSetting up bi-directional communication with identifier: {self.identifier}")
+                        # Add custom curation callback to send data to parent window
+                        self.submit_trigger = self.create_submit_trigger()
+                        # Add postMessage listener to receive data from parent window
+                        self.listener = self.create_post_message_listener()
+
+                    self.win_layout = self._create_main_window()
+                    self.layout[0] = self.win_layout
+                    if self.identifier is not None:
+                        self.layout.append(self.submit_trigger)
+                        self.layout.append(self.listener)
+
                     print("\nEphys GUI initialized successfully!")
                     t_stop = time.perf_counter()
                     print(f"Initialization time: {t_stop - t_start:.2f} seconds")
@@ -204,25 +292,30 @@ class EphysGuiView(param.Parameterized):
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
-            curation_dict = deepcopy(default_curation_dict)
-            curation_dict["unit_ids"] = self.analyzer.unit_ids
-            if "decoder_label" in self.analyzer.sorting.get_property_keys():
-                decoder_labels = self.analyzer.get_sorting_property("decoder_label")
-                noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
-                curation_dict["removed"] = list(noise_units)
-                for unit_id in noise_units:
-                    curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
+            if self.preload_curation:
+                curation_dict = deepcopy(default_curation_dict)
+                curation_dict["unit_ids"] = self.analyzer.unit_ids
+                if "decoder_label" in self.analyzer.sorting.get_property_keys():
+                    decoder_labels = self.analyzer.get_sorting_property("decoder_label")
+                    noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
+                    curation_dict["removed"] = list(noise_units)
+                    for unit_id in noise_units:
+                        curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
 
-            try:
-                validate_curation_dict(curation_dict)
-            except ValueError as e:
-                print(f"Curated dictionary is invalid: {e}")
+                try:
+                    validate_curation_dict(curation_dict)
+                except ValueError as e:
+                    print(f"Curated dictionary is invalid: {e}")
+                    curation_dict = None
+            else:
                 curation_dict = None
 
             if self.fast_mode:
                 skip_extensions = ["waveforms", "principal_components"]
             else:
                 skip_extensions = None
+
+            curation_callback = self._curation_callback if self.identifier is not None else None
 
             win = run_mainwindow(
                 analyzer=self.analyzer,
@@ -235,8 +328,9 @@ class EphysGuiView(param.Parameterized):
                 verbose=True,
                 layout=aind_layout,
                 skip_extensions=skip_extensions,
+                curation_callback=curation_callback,
             )
-            self.win = win
+            self.sigui_win = win
             return win.main_layout
         else:
             return pn.pane.Markdown(help_txt, sizing_mode="stretch_both")
@@ -250,13 +344,17 @@ class EphysGuiView(param.Parameterized):
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
         # 1) Release GUI controller references
-        if self.win is not None:
-            self.win.controller.analyzer = None
-            del self.win.controller.analyzer
-            self.win.controller = None
-            del self.win.controller
-            self.win = None
-            del self.win
+        if self.sigui_win is not None:
+            self.sigui_win.controller.analyzer = None
+            del self.sigui_win.controller.analyzer
+            self.sigui_win.controller = None
+            del self.sigui_win.controller
+            self.sigui_win = None
+            del self.sigui_win
+
+        if self.win_layout is not None:
+            self.win_layout = None
+            del self.win_layout
 
         # 2) Delete the analyzer reference to release memory-mapped files and other resources
         if self.analyzer is not None:
