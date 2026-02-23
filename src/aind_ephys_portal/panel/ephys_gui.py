@@ -17,6 +17,7 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.curation import validate_curation_dict
 
 from aind_ephys_portal.panel.logging import setup_logging, local_log_context
+from aind_ephys_portal.panel.utils import PostMessageListener
 
 
 displayed_unit_properties = [
@@ -71,7 +72,7 @@ def _malloc_trim():
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, fast_mode=False, **params):
+    def __init__(self, analyzer_path, recording_path, identifier=None, fast_mode=False, **params):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -79,7 +80,11 @@ class EphysGuiView(param.Parameterized):
 
         self.analyzer_path = analyzer_path
         self.recording_path = recording_path
+        if identifier is not None and identifier == "":
+            identifier = None
+        self.identifier = identifier
         self.fast_mode = fast_mode
+        print("Fast mode:", self.fast_mode)
         self.analyzer = None
         self._cleanup_registered = False
         self._init_cb = None
@@ -105,6 +110,72 @@ class EphysGuiView(param.Parameterized):
                 pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
+
+    def add_post_message_listener(self):
+        if self.identifier is not None:
+            listener = PostMessageListener()
+            listener.on_msg(self._set_curation_data_from_message)
+        else:
+            listener = None
+        return listener
+
+    def create_curation_trigger(self):
+        # Create objects to submit and listen
+        submit_trigger = pn.widgets.TextInput(value="", visible=False)
+        # Add JavaScript callback that triggers when the TextInput value changes
+        submit_trigger.jscallback(
+            value="""
+            // Extract just the JSON data (remove timestamp suffix)
+            const fullValue = cb_obj.value;
+            const lastUnderscore = fullValue.lastIndexOf('_');
+            const dataStr = lastUnderscore > 0 ? fullValue.substring(0, lastUnderscore) : fullValue;
+
+            if (dataStr && dataStr.length > 0) {
+                try {
+                    const data = JSON.parse(dataStr);
+                    console.log('Sending data to parent:', data);
+                    parent.postMessage({
+                            type: 'panel-data',
+                            identifier: '%s',
+                            data: data
+                        },
+                    '*');
+                    console.log('Data sent successfully to parent window');
+                } catch (error) {
+                    console.error('Error sending data to parent:', error);
+                }
+            }
+            """.format(self.identifier)
+        )
+        return submit_trigger
+
+
+    def _curation_callback(self, curation_data):
+        self.submit_trigger.value = curation_data + f"_{int(time.time() * 1000)}"
+
+    def _set_curation_data_from_message(self, event):
+        """
+        Handler for PostMessageListener.on_msg.
+
+        event.data is whatever the JS side passed to model.send_msg(...).
+        Expected shape:
+        {
+            "payload": {"type": "curation-data", "identifier": "<identifier>", "data": <curation_dict>},
+        }
+        """
+        msg = event.data
+        payload = (msg or {}).get("payload", {})
+        curation_data = payload.get("data", None)
+        identifier = payload.get("identifier", None)
+        if identifier != self.identifier:
+            print(f"Received message for identifier {identifier}, but current identifier is {self.identifier}. Ignoring.")
+            return
+
+        # Optional: validate basic structure
+        if not isinstance(curation_data, dict):
+            print("Invalid curation_data type:", type(curation_data), curation_data)
+            return
+        self.sigui_win.set_external_curation(curation_data)
 
     def _register_cleanup(self):
         """Register cleanup on the current document. Must be called from within the session."""
@@ -153,8 +224,20 @@ class EphysGuiView(param.Parameterized):
                     self._initialize_analyzer()
                     if self.recording_path != "":
                         self._set_processed_recording()
-                    win = self._create_main_window()
-                    self.layout[0] = win
+
+                    if self.identifier is not None:
+                        print(f"\nSetting up bi-directional communication with identifier: {self.identifier}")
+                        # Add custom curation callback to send data to parent window
+                        self.submit_trigger = self.create_curation_trigger()
+                        # Add postMessage listener to receive data from parent window
+                        self.listener = self.add_post_message_listener()
+
+                    self.win_layout = self._create_main_window()
+                    self.layout[0] = self.win_layout
+                    if self.identifier is not None:
+                        self.layout.append(self.submit_trigger)
+                        self.layout.append(self.listener)
+
                     print("\nEphys GUI initialized successfully!")
                     t_stop = time.perf_counter()
                     print(f"Initialization time: {t_stop - t_start:.2f} seconds")
@@ -224,6 +307,8 @@ class EphysGuiView(param.Parameterized):
             else:
                 skip_extensions = None
 
+            curation_callback = self._curation_callback if self.identifier is not None else None
+
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
@@ -235,8 +320,9 @@ class EphysGuiView(param.Parameterized):
                 verbose=True,
                 layout=aind_layout,
                 skip_extensions=skip_extensions,
+                curation_callback=curation_callback,
             )
-            self.win = win
+            self.sigui_win = win
             return win.main_layout
         else:
             return pn.pane.Markdown(help_txt, sizing_mode="stretch_both")
@@ -250,13 +336,17 @@ class EphysGuiView(param.Parameterized):
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
         # 1) Release GUI controller references
-        if self.win is not None:
-            self.win.controller.analyzer = None
-            del self.win.controller.analyzer
-            self.win.controller = None
-            del self.win.controller
-            self.win = None
-            del self.win
+        if self.sigui_win is not None:
+            self.sigui_win.controller.analyzer = None
+            del self.sigui_win.controller.analyzer
+            self.sigui_win.controller = None
+            del self.sigui_win.controller
+            self.sigui_win = None
+            del self.sigui_win
+
+        if self.win_layout is not None:
+            self.win_layout = None
+            del self.win_layout
 
         # 2) Delete the analyzer reference to release memory-mapped files and other resources
         if self.analyzer is not None:

@@ -12,6 +12,7 @@ import spikeinterface_gui.utils_panel  # noqa: F401
 
 from aind_ephys_portal.panel.ephys_gui import EphysGuiView
 
+    
 
 # State sync
 class Settings(param.Parameterized):
@@ -19,6 +20,7 @@ class Settings(param.Parameterized):
 
     analyzer_path = param.String(default="")
     recording_path = param.String(default="")
+    identifier = param.String(default="")
     fast_mode = param.Boolean(
         default=False,
         doc="Whether to enable fast mode (skips waveforms and principal components)"
@@ -26,13 +28,15 @@ class Settings(param.Parameterized):
 
 
 settings = Settings()
-pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "fast_mode": "fast_mode"})
+pn.state.location.sync(settings, {"analyzer_path": "analyzer_path", "recording_path": "recording_path", "identifier": "identifier", "fast_mode": "fast_mode"})
 
 # Manually decode stream_name after syncing
 settings.analyzer_path = urllib.parse.unquote(settings.analyzer_path)
 settings.recording_path = urllib.parse.unquote(settings.recording_path)
 
-ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, fast_mode=settings.fast_mode)
+print(settings)
+
+ephys_gui = EphysGuiView(analyzer_path=settings.analyzer_path, recording_path=settings.recording_path, identifier=settings.identifier, fast_mode=settings.fast_mode)
 
 ephys_gui.panel().servable(title="AIND Ephys GUI")
 
