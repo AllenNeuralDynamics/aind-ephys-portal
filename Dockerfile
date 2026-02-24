@@ -31,7 +31,7 @@ RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout edf817027136ce4b4b8bf20ce5125f7f4be336e5 && \
+    git checkout b3ac872c7c4d932e687154fd4a789de4c7bc150e && \
     pip install . && cd ..
 
 

@@ -59,7 +59,7 @@ aind_layout = dict(
     zone4=[],
     zone5=["probe"],
     zone6=["ndscatter", "similarity"],
-    zone7=["waveform", "waveformheatmap"],
+    zone7=["waveform"],
     zone8=["correlogram", "metrics", "mainsettings"],
 )
 
@@ -162,7 +162,6 @@ class EphysGuiView(param.Parameterized):
         }
         """
         msg = event.data
-        print(f"Received message: {msg}")
         payload = (msg or {}).get("payload", {})
         identifier = payload.get("identifier", None)
         if identifier != self.identifier:
@@ -173,6 +172,8 @@ class EphysGuiView(param.Parameterized):
         if data_type != "curation-data":
             print(f"Received message with type {data_type}, but expected 'curation-data'. Ignoring.")
             return
+
+        print(f"Received curation message!")
 
         curation_data = payload.get("data", None)
 
