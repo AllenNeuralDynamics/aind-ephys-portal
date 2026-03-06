@@ -57,6 +57,23 @@ ephys_gui = EphysGuiView(analyzer_path=analyzer_path, recording_path=recording_p
 
 ephys_gui.panel().servable(title="AIND Ephys GUI")
 
+# Register session cleanup on the document. The document is definitively bound
+# to this session at module-execution time, so curdoc is correct here.
+# Factory function creates a proper closure (cell variable) for view_ref,
+# which is immune to Panel's exec() scoping (exec uses separate globals/locals
+# dicts, so plain module-level names are inaccessible inside callbacks).
+def _make_cleanup_callback(view):
+    view_ref = [view]
+    def _on_session_destroyed(session_context):
+        v = view_ref[0]
+        view_ref[0] = None  # always break the reference, even if cleanup raises
+        if v is not None:
+            v.cleanup()
+    return _on_session_destroyed
+
+pn.state.curdoc.on_session_destroyed(_make_cleanup_callback(ephys_gui))
+print(f"[GUI] Cleanup registered on doc {id(pn.state.curdoc)}")
+
 # Don't keep a module-level reference to the heavy GUI object.
 # The servable layout is now owned by Panel/Bokeh's document.
 del ephys_gui

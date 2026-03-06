@@ -172,3 +172,8 @@ cython_debug/
 
 # VSCODE
 .vscode/
+
+# CLAUDE
+.claude/
+CLAUDE.md
+*MEMORY.md

@@ -58,7 +58,7 @@ pip install -e ".[dev]"
 1. Build the Docker image locally and run a Docker container:
 ```sh
 docker build -t aind-ephys-portal .
-docker run -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 -v ~/.aws:/root/.aws:ro -p 8000:8000 aind-ephys-portal
+docker run --rm -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 -v ~/.aws:/root/.aws:ro -p 8000:8000 aind-ephys-portal
 ```
 2. Navigate to '0.0.0.0:8000` to view the app.
 

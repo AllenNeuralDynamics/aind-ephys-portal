@@ -87,7 +87,6 @@ class EphysGuiView(param.Parameterized):
         self.fast_mode = fast_mode
         self.preload_curation = preload_curation
         self.analyzer = None
-        self._cleanup_registered = False
         self._init_cb = None
 
         self.spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
@@ -183,30 +182,7 @@ class EphysGuiView(param.Parameterized):
             return
         self.sigui_win.set_external_curation(curation_data)
 
-    def _register_cleanup(self):
-        """Register cleanup on the current document. Must be called from within the session."""
-        if self._cleanup_registered:
-            return
-        doc = pn.state.curdoc
-        if doc is not None and hasattr(doc, "on_session_destroyed"):
-            # Use a weak-like reference pattern: store the id and look up via the doc
-            # to avoid the closure preventing GC of self
-            view_ref = [self]  # mutable container we can clear
-
-            def _on_destroy(session_context):
-                view = view_ref[0]
-                if view is not None:
-                    view.cleanup()
-                    view_ref[0] = None  # break the reference
-
-            doc.on_session_destroyed(_on_destroy)
-            self._cleanup_registered = True
-            print(f"[GUI] Cleanup registered on doc {id(doc)}")
-
     def _initialize(self):
-        # Register cleanup HERE — the document is now bound to this GUI session
-        self._register_cleanup()
-
         self.layout[0] = self.loading_banner
         self.log_output.value = ""
 
@@ -344,45 +320,153 @@ class EphysGuiView(param.Parameterized):
         current_ram_usage = initial_mem.used / (1024**3)
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
-        # 1) Release GUI controller references
-        if self.sigui_win is not None:
-            self.sigui_win.controller.analyzer = None
-            del self.sigui_win.controller.analyzer
-            self.sigui_win.controller = None
-            del self.sigui_win.controller
+        # 1) Clear postMessage listener and submit trigger (they hold bound-method back-refs to self)
+        self.listener = None
+        self.submit_trigger = None
+
+        # 2) Release GUI controller and all its data
+        sigui_win = getattr(self, "sigui_win", None)
+        if sigui_win is not None:
+            controller = getattr(sigui_win, "controller", None)
+            if controller is not None:
+                # Clear views list — each view has param watchers holding back-refs
+                for view in list(getattr(controller, "views", [])):
+                    try:
+                        view.settings._parameterized.param.unwatch_all()
+                    except Exception:
+                        pass
+                controller.views = []
+                # Clear PanelMainWindow's view dicts too
+                sigui_win.views = {}
+                sigui_win.view_layouts = {}
+                # Explicitly drop all data cached on the controller.
+                # Includes numpy arrays, extension objects (waveforms_ext, pc_ext hold
+                # zarr array references), spike indices, and the units table.
+                for attr in (
+                    # template data
+                    "templates_average", "templates_std",
+                    # positions / geometry
+                    "unit_positions", "visible_channel_inds",
+                    # quality / metrics
+                    "noise_levels", "metrics",
+                    # spike-level arrays
+                    "spike_amplitudes", "amplitude_scalings", "spike_depths",
+                    "spikes", "random_spikes_indices", "segment_slices",
+                    "final_spike_samples",
+                    "_spike_index_by_units", "_spike_index_by_segment_and_units",
+                    "_spike_visible_indices", "_spike_selected_indices",
+                    # correlograms / ISI
+                    "correlograms", "correlograms_bins",
+                    "isi_histograms", "isi_bins",
+                    # similarity
+                    "_similarity_by_method",
+                    # extension objects (hold zarr array refs — must clear before analyzer)
+                    "waveforms_ext", "pc_ext", "_pc_projections",
+                    # misc
+                    "_extremum_channel", "_traces_cached", "units_table",
+                    "_potential_merges",
+                    # sparsity / signal handler
+                    "external_sparsity", "analyzer_sparsity", "signal_handler",
+                ):
+                    try:
+                        setattr(controller, attr, None)
+                    except Exception:
+                        pass
+                controller.analyzer = None
+                sigui_win.controller = None
             self.sigui_win = None
-            del self.sigui_win
 
-        if self.win_layout is not None:
-            self.win_layout = None
-            del self.win_layout
+        self.win_layout = getattr(self, "win_layout", None) and None
 
-        # 2) Delete the analyzer reference to release memory-mapped files and other resources
-        if self.analyzer is not None:
+        # 3) Clear the Panel layout children before releasing the layout reference.
+        #    This unregisters the heavy GUI models from Bokeh's Document._all_models
+        #    so they can be freed once the document is torn down.
+        layout = getattr(self, "layout", None)
+        if layout is not None:
+            try:
+                layout.clear()
+            except Exception:
+                pass
+        self.layout = None
+
+        # 4) Close zarr store and release the analyzer.
+        #    Explicitly closing the store releases fsspec file handles and
+        #    their associated S3 block/chunk caches before the Python GC runs.
+        if getattr(self, "analyzer", None) is not None:
+            # Invalidate recording zarr store cache if a recording is attached
+            try:
+                recording = getattr(self.analyzer, "recording", None)
+                if recording is not None:
+                    rec_zarr_root = getattr(recording, "_zarr_root", None)
+                    if rec_zarr_root is not None:
+                        rec_store = getattr(rec_zarr_root, "store", None)
+                        if rec_store is not None:
+                            rec_fs = getattr(rec_store, "fs", None)
+                            if rec_fs is not None:
+                                try:
+                                    rec_fs.invalidate_cache()
+                                except Exception:
+                                    pass
+                            try:
+                                rec_store.close()
+                            except Exception:
+                                pass
+                        print("Recording zarr store released.")
+            except Exception as e:
+                print(f"Warning: could not close recording zarr store: {e}")
+            try:
+                zarr_root = self.analyzer._get_zarr_root(mode="r")
+                store = getattr(zarr_root, "store", None)
+                if store is not None:
+                    # Clear fsspec filesystem cache (dir listings + open handles)
+                    fs = getattr(store, "fs", None)
+                    if fs is not None:
+                        try:
+                            fs.invalidate_cache()
+                        except Exception:
+                            pass
+                    try:
+                        store.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"Warning: could not close zarr store: {e}")
             self.analyzer = None
-            del self.analyzer
             print("Analyzer resources released.")
 
-        # 3) Clear layout references
+        # 5) Clear remaining widget references
         if self._init_cb is not None:
             self._init_cb.stop()
             self._init_cb = None
-        self.layout = None
         self.log_output = None
         self.spinner = None
         self.loading_banner = None
 
-        # 4) Force garbage collection (two passes for ref cycles)
-        gc.collect()
-        gc.collect()
+        # 6) Defer gc + malloc_trim until after the Bokeh document has finished
+        #    releasing its own model references (Document._all_models is cleared
+        #    after on_session_destroyed callbacks return, so gc.collect() here
+        #    would be premature).
+        try:
+            from tornado.ioloop import IOLoop
 
-        # 5) Force glibc to return freed memory to OS
-        _malloc_trim()
+            def _deferred_gc():
+                gc.collect()
+                gc.collect()
+                _malloc_trim()
+                final_mem = psutil.virtual_memory()
+                used = final_mem.used / (1024**3)
+                print(f"\nRAM Usage after deferred cleanup: {used:.2f} / {total_ram:.2f} GB\n")
 
-
-        final_mem = psutil.virtual_memory()
-        current_ram_usage = final_mem.used / (1024**3)
-        print(f"\nRAM Usage after cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
+            IOLoop.current().call_later(2.0, _deferred_gc)
+            print("Deferred GC scheduled.")
+        except Exception:
+            # Fallback: run immediately if IOLoop is unavailable
+            gc.collect()
+            gc.collect()
+            _malloc_trim()
+            final_mem = psutil.virtual_memory()
+            used = final_mem.used / (1024**3)
+            print(f"\nRAM Usage after cleanup: {used:.2f} / {total_ram:.2f} GB\n")
 
 
     def panel(self):
