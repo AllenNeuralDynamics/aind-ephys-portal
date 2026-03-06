@@ -28,12 +28,17 @@ RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
     git checkout f732780fd88f5802033b57c9bb9b06229ec7de30 && \
     pip install . && cd ..
 
+# Force scikit-learn to 1.6.1 to avoid issues with newer versions
+RUN pip install scikit-learn==1.6.1
+
 # Install spikeinterface-gui from source
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
     cd spikeinterface-gui && \
-    git checkout 439486d717910b9c50d58a97aaaeb7e829669ede && \
+    git checkout 47999372e405f5d7a435072ca3015a9fd1b9812c && \
     pip install . && cd ..
 
+
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_gui_app.py src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_launcher_app.py src/aind_ephys_portal/ephys_monitor_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --index ephys_portal_app.py --check-unused-sessions 2000 --unused-session-lifetime 5000 --num-threads 8"]
