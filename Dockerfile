@@ -23,19 +23,13 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
 RUN pip install wavpack-numcodecs
 
 # Install spikeinterface from source
-RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
-    cd spikeinterface && \
-    git checkout f732780fd88f5802033b57c9bb9b06229ec7de30 && \
-    pip install . && cd ..
+RUN pip install spikeinterface==0.104.0
 
 # Force scikit-learn to 1.6.1 to avoid issues with newer versions
 RUN pip install scikit-learn==1.6.1
 
 # Install spikeinterface-gui from source
-RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
-    cd spikeinterface-gui && \
-    git checkout 47999372e405f5d7a435072ca3015a9fd1b9812c && \
-    pip install . && cd ..
+RUN pip install spikeinterface-gui==0.13.1
 
 
 ENV PYTHONUNBUFFERED=1
