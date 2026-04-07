@@ -4,12 +4,11 @@ import param
 import panel as pn
 import pandas as pd
 import boto3
-from botocore import UNSIGNED
-from botocore.config import Config
 
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
 from aind_ephys_portal.panel.utils import format_link, OUTER_STYLE, EPHYSGUI_LINK_PREFIX
+from aind_ephys_portal.panel.logging import setup_logging
 
 s3_client = boto3.client("s3")
 
@@ -27,6 +26,7 @@ class EphysPortal:
 
     def __init__(self):
         """Initialize the SIGUI Portal application."""
+        setup_logging()  # Ensure logging is set up for this panel
         self.search_options = SearchOptions()
         # Get the search input widget
         self.search_bar = pn.widgets.TextInput(
@@ -69,10 +69,8 @@ class EphysPortal:
         # Update the streams panel when a row is selected
         self.results_panel.on_click(self.update_streams)
 
-        # Start the auto-update process
-        # TODO: debug
-        # self.auto_update_datasets()
-
+        self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
+        self.refresh_button.on_click(self.update_results)
         # Initialize with current results
         self.update_results(None)
 
@@ -80,6 +78,9 @@ class EphysPortal:
         """Update the results panel with the current search results."""
         print("Updating search results...")
         if event is None:
+            df = self.search_options.df
+        elif event.name == "clicks":
+            self.search_options.update_options()
             df = self.search_options.df
         else:
             # Filter the DataFrame based on the search input
@@ -118,15 +119,21 @@ class EphysPortal:
                     raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
                     print(f"Raw asset prefix: {raw_asset_prefix}")
                     if raw_asset_prefix is None:
-                        recording_path=""
+                        recording_path = ""
                     else:
                         recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
                     analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
-                    print("Raw path:", recording_path)
-                    print("Analyzer path:", analyzer_path)
-                    link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path).replace("#", "%23")
+                    if not analyzer_path.endswith(".zarr"):
+                        link_url = "Only Zarr files are supported."
+                    else:
+                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
                     links_url.append(link_url)
-                links = [format_link(link) for link in links_url]
+                links = []
+                for link in links_url:
+                    if "ephys_gui_app" in link:
+                        links.append(format_link(link, text="SpikeInterface-GUI"))
+                    else:
+                        links.append(link)
 
                 # Update the streams panel
                 streams_df = pd.DataFrame({"Stream name": stream_names, "Ephys GUI View": links})
@@ -138,17 +145,8 @@ class EphysPortal:
         streams_df = pd.DataFrame({"Stream name": [no_streams_text], "Ephys GUI View": [""]})
         self.streams_panel.value = streams_df
 
-    # def auto_update_datasets(self):
-    #     # Update the search options
-    #     print(f"Updating datasets. Current number of ecephys processed assets: {len(self.search_options.df)}")
-    #     self.search_options.update_options()
-    #     print(f"Updated datasets. New number of ecephys processed assets: {len(self.search_options.df)}")
-
-    #     # Schedule next run in 1 hour (3600 seconds)
-    #     threading.Timer(3600, self.auto_update_datasets).start()
-
     def get_raw_asset_location(self, asset_location):
-        asset_without_s3 = asset_location[asset_location.find("s3://") + 5:]
+        asset_without_s3 = asset_location[asset_location.find("s3://") + 5 :]
         asset_split = asset_without_s3.split("/")
         bucket_name = asset_split[0]
         session_name = "/".join(asset_split[1:])
@@ -174,7 +172,7 @@ class EphysPortal:
         # and streams panel at the bottom
         col = pn.Column(
             pn.pane.Markdown("# AIND Ephys Portal", styles={"text-align": "center"}),
-            pn.Row(self.search_bar, align="center"),
+            pn.Row(self.search_bar, self.refresh_button, align="center"),
             pn.layout.Divider(),
             pn.pane.Markdown("## Search Results", styles={"text-align": "left"}),
             self.results_panel,
@@ -182,10 +180,12 @@ class EphysPortal:
             pn.pane.Markdown("## Postprocessed Streams", styles={"text-align": "left"}),
             self.streams_panel,
             min_width=900,
+            max_width=1200,
+            sizing_mode="stretch_width",
             styles=OUTER_STYLE,
             align="center",
         )
-        display = pn.Row(pn.HSpacer(), col, pn.HSpacer())
+        display = pn.Row(pn.HSpacer(max_width=200), col, pn.HSpacer(max_width=200))
 
         return display
 
@@ -208,8 +208,8 @@ class SearchOptions(param.Parameterized):
         data = []
         try:
             # Get initial data from database
-            self.all_records = get_all_ecephys_derived()
-            print(f"Loaded {len(self.all_records)} records.")
+            self.all_records = get_all_ecephys_derived(additional_includes_in_name="sorted")
+            print(f"Loaded {len(self.all_records)} 'sorted' records.")
             # Process records into a list of dictionaries
             for record in self.all_records:
                 r = {
@@ -257,8 +257,10 @@ class SearchOptions(param.Parameterized):
 
         # Search for records matching the text filter
         try:
-            # Make sure we're returning a DataFrame, not a Series
+            # Search first in the 'name' column. If no matches, we check for the dataset ID
             mask = self.df["name"].str.contains(text_filter, case=False)
+            if not mask.any():
+                mask = self.df["id"].str.contains(text_filter, case=False)
             df_filtered = self.df[mask]
             return df_filtered
         except Exception as e:

@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# VSCODE
+.vscode/
+
+# CLAUDE
+.claude/
+CLAUDE.md
+*MEMORY.md
