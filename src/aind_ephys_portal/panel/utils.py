@@ -59,6 +59,72 @@ def format_css_background():
 
 
 
+class FullscreenResizeHandler(ReactComponent):
+    """
+    Pure-JS component that listens for 'fullscreen-resize' postMessages and
+    forces Bokeh to re-measure canvas sizes without any Python layout rebuild.
+
+    Bokeh 3.x uses ResizeObserver (not window.resize events) to detect size
+    changes. We trigger it by briefly collapsing the Bokeh root element to 1px
+    then removing the override — ResizeObserver fires on the size delta, Bokeh
+    re-renders at the new (fullscreen) container dimensions.
+
+    This avoids the destructive Python layout swap (remove + re-add) which
+    loses Bokeh event handler routing (e.g. selectiongeometry) and resets
+    toolbar.active_drag, breaking the lasso selection tool.
+    """
+
+    _esm = """
+    export function render({ model }) {
+      React.useEffect(() => {
+        function triggerResize() {
+          // 1) BokehJS API — invalidate layout on all registered views.
+          //    Bokeh.index is a plain object in Bokeh 3.x ({id: view, ...}).
+          try {
+            if (window.Bokeh && window.Bokeh.index) {
+              Object.values(window.Bokeh.index).forEach(view => {
+                if (view) {
+                  view.invalidate_layout?.();
+                  view.invalidate_render?.();
+                }
+              });
+            }
+          } catch(e) {
+            console.warn("[FullscreenResizeHandler] BokehJS API error:", e);
+          }
+
+          // 2) Force ResizeObserver to fire by briefly collapsing the Bokeh
+          //    root element then removing the override (one animation frame)
+          const roots = document.querySelectorAll("[data-root-id]");
+          roots.forEach(el => {
+            el.style.setProperty("width",  "1px", "important");
+            el.style.setProperty("height", "1px", "important");
+          });
+          requestAnimationFrame(() => {
+            roots.forEach(el => {
+              el.style.removeProperty("width");
+              el.style.removeProperty("height");
+            });
+            // 3) window.resize fallback for older Bokeh / Panel versions
+            window.dispatchEvent(new Event("resize"));
+          });
+        }
+
+        function onMessage(event) {
+          const data = event.data;
+          if (!data || data.type !== "fullscreen-resize") return;
+          triggerResize();
+          setTimeout(triggerResize, 300);
+        }
+
+        window.addEventListener("message", onMessage);
+        return () => window.removeEventListener("message", onMessage);
+      }, []);
+      return <></>;
+    }
+    """
+
+
 class PostMessageListener(ReactComponent):
     """
     Listen to window.postMessage events and forward them to Python via on_msg().

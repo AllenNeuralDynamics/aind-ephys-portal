@@ -18,7 +18,7 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.curation import validate_curation_dict
 
 from aind_ephys_portal.panel.logging import setup_logging, local_log_context
-from aind_ephys_portal.panel.utils import PostMessageListener
+from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
 
 
 displayed_unit_properties = [
@@ -110,6 +110,9 @@ class EphysGuiView(param.Parameterized):
                 pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
+
+    def create_fullscreen_resize_listener(self):
+        return FullscreenResizeHandler()
 
     def create_post_message_listener(self):
         if self.identifier is not None:
@@ -212,13 +215,15 @@ class EphysGuiView(param.Parameterized):
                         # Add custom curation callback to send data to parent window
                         self.submit_trigger = self.create_submit_trigger()
                         # Add postMessage listener to receive data from parent window
-                        self.listener = self.create_post_message_listener()
+                        self.curation_listener = self.create_post_message_listener()
+                        self.fullscreen_listener = self.create_fullscreen_resize_listener()
 
                     self.win_layout = self._create_main_window()
                     self.layout[0] = self.win_layout
                     if self.identifier is not None:
                         self.layout.append(self.submit_trigger)
-                        self.layout.append(self.listener)
+                        self.layout.append(self.curation_listener)
+                        self.layout.append(self.fullscreen_listener)
 
                     print("\nEphys GUI initialized successfully!")
                     t_stop = time.perf_counter()
@@ -231,7 +236,9 @@ class EphysGuiView(param.Parameterized):
 
             if error is not None:
                 print(f"Error during initialization: {error}")
-                self.layout[0] = pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
+                self.layout = pn.Column(
+                    pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
+                )
             else:
                 final_mem = psutil.virtual_memory()
                 final_ram_usage = final_mem.used / (1024**3)
@@ -320,8 +327,9 @@ class EphysGuiView(param.Parameterized):
         current_ram_usage = initial_mem.used / (1024**3)
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
 
-        # 1) Clear postMessage listener and submit trigger (they hold bound-method back-refs to self)
-        self.listener = None
+        # 1) Clear postMessage listeners and submit trigger (they hold bound-method back-refs to self)
+        self.curation_listener = None
+        self.fullscreen_listener = None
         self.submit_trigger = None
 
         # 2) Release GUI controller and all its data
