@@ -236,9 +236,10 @@ class EphysGuiView(param.Parameterized):
 
             if error is not None:
                 print(f"Error during initialization: {error}")
-                self.layout = pn.Column(
-                    pn.pane.Markdown(f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both")
-                )
+                if len(self.layout) > 0:
+                    self.layout[0] = pn.pane.Markdown(
+                        f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both"
+                    )
             else:
                 final_mem = psutil.virtual_memory()
                 final_ram_usage = final_mem.used / (1024**3)
@@ -269,9 +270,12 @@ class EphysGuiView(param.Parameterized):
                 access_path = path_iter.access_path
                 break
         set_value_in_extractor_dict(recording_dict, access_path, self.recording_path)
-        recording_processed = si.load(recording_dict)
-        print(f"Processed recording loaded: {recording_processed}")
-        self.analyzer.set_temporary_recording(recording_processed)
+        try:
+            recording_processed = si.load(recording_dict)
+            print(f"Processed recording loaded: {recording_processed}")
+            self.analyzer.set_temporary_recording(recording_processed)
+        except Exception as e:
+            print(f"Error loading processed recording: {e}")
 
     def _create_main_window(self):
         if self.analyzer is not None:
