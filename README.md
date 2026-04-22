@@ -41,7 +41,7 @@ panel serve \
     --setup src/aind_ephys_portal/setup.py \
     --static-dirs images=src/aind_ephys_portal/images \
     --index ephys_portal_app.py \
-    --num-procs 4
+    --num-threads 8
 ```
 
 This will start a Panel server and make the application available in your web browser.
@@ -58,7 +58,16 @@ pip install -e ".[dev]"
 1. Build the Docker image locally and run a Docker container:
 ```sh
 docker build -t aind-ephys-portal .
-docker run --rm -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 -v ~/.aws:/root/.aws:ro -p 8000:8000 aind-ephys-portal
+
+# Make sure your SSO session is active
+aws sso login
+
+# Export temporary credentials and run Docker
+eval "$(bash scripts/export_aws_sso_creds.sh)"
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+  -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 \
+  -p 8000:8000 aind-ephys-portal
 ```
 2. Navigate to '0.0.0.0:8000` to view the app.
 

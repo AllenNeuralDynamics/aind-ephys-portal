@@ -5,6 +5,7 @@ WORKDIR /app
 ADD src ./src
 ADD pyproject.toml .
 ADD setup.py .
+ADD entrypoint.py .
 
 
 RUN apt-get update
@@ -31,10 +32,7 @@ RUN pip install scikit-learn==1.6.1
 # Install spikeinterface-gui from source
 RUN pip install spikeinterface-gui==0.13.1
 
-
-ENV PYTHONUNBUFFERED=1
-
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
-ENTRYPOINT ["sh", "-c", "panel serve src/aind_ephys_portal/ephys_gui_app.py src/aind_ephys_portal/ephys_portal_app.py src/aind_ephys_portal/ephys_launcher_app.py src/aind_ephys_portal/ephys_monitor_app.py --setup src/aind_ephys_portal/setup.py --static-dirs images=src/aind_ephys_portal/images --address 0.0.0.0 --port 8000 --allow-websocket-origin ${ALLOW_WEBSOCKET_ORIGIN} --index ephys_portal_app.py --check-unused-sessions 2000 --unused-session-lifetime 5000 --num-threads 8"]
+ENTRYPOINT ["python", "entrypoint.py"]
