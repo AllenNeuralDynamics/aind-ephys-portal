@@ -35,4 +35,4 @@ RUN pip install spikeinterface-gui==0.13.1
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
-ENTRYPOINT ["python", "entrypoint.py"]
+ENTRYPOINT ["python", "entrypoint.py", "--test"]

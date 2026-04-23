@@ -27,22 +27,14 @@ pip install -e .
 To run the Ephys Portal you can either use tha `launch.sh` script:
 
 ```bash
-bash launch.sh
+AWS_PROFILE=your-profile
+
+# Make sure your SSO session is active
+aws sso login --profile $AWS_PROFILE
+
+python entrypoint.py --port 8000 (default) --address 0.0.0.0 (default)
 ```
 
-or serve panel apps directly:
-
-```bash
-panel serve \
-    src/aind_ephys_portal/ephys_gui_app.py \
-    src/aind_ephys_portal/ephys_launcher_app.py \
-    src/aind_ephys_portal/ephys_monitor_app.py \
-    src/aind_ephys_portal/ephys_log_app.py \
-    --setup src/aind_ephys_portal/setup.py \
-    --static-dirs images=src/aind_ephys_portal/images \
-    --index ephys_portal_app.py \
-    --num-threads 8
-```
 
 This will start a Panel server and make the application available in your web browser.
 
@@ -59,15 +51,14 @@ pip install -e ".[dev]"
 ```sh
 docker build -t aind-ephys-portal .
 
+AWS_PROFILE=your-profile
+
 # Make sure your SSO session is active
-aws sso login
+aws sso login --profile $AWS_PROFILE
 
 # Export temporary credentials and run Docker
-eval "$(bash scripts/export_aws_sso_creds.sh)"
-docker run --rm \
-  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
-  -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 \
-  -p 8000:8000 aind-ephys-portal
+eval "$(aws configure export-credentials --profile $AWS_PROFILE --format env)"
+docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e ALLOW_WEBSOCKET_ORIGIN=0.0.0.0:8000 -p 8000:8000 aind-ephys-portal
 ```
 2. Navigate to '0.0.0.0:8000` to view the app.
 

@@ -17,7 +17,9 @@ import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
 from spikeinterface.curation import validate_curation_dict
 
-from aind_ephys_portal.panel.logging import setup_logging, local_log_context
+from aind_ephys_portal.panel.logging import (
+    setup_logging, local_log_context, get_max_number_of_gui_sessions, list_gui_sessions
+)
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
 
 
@@ -94,7 +96,20 @@ class EphysGuiView(param.Parameterized):
         self.loading_banner = pn.Row(self.spinner, self.log_output, sizing_mode="stretch_both")
 
         self.win = None
-        if self.analyzer_path != "":
+
+        num_gui_sessions = len(list_gui_sessions())
+        max_sessions = get_max_number_of_gui_sessions()
+        if num_gui_sessions > max_sessions:
+            print(f"Current number of GUI sessions: {num_gui_sessions}. Max allowed per worker: {max_sessions}.")
+            self.layout = pn.Column(
+                pn.pane.Markdown(
+                    f"⚠️ Too many active GUI sessions ({num_gui_sessions}). Max allowed per worker is {max_sessions}. "
+                    f"Please try again in a few minutes.",
+                    sizing_mode="stretch_both",
+                ),
+                sizing_mode="stretch_both",
+            )
+        elif self.analyzer_path != "":
             self.layout = pn.Column(
                 self._create_main_window(),
                 sizing_mode="stretch_both",
