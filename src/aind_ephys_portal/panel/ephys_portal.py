@@ -1,5 +1,5 @@
 """Main Panel application for the AIND SIGUI Portal."""
-
+import os
 import param
 import panel as pn
 import pandas as pd
@@ -27,7 +27,10 @@ class EphysPortal:
     def __init__(self):
         """Initialize the SIGUI Portal application."""
         setup_logging()  # Ensure logging is set up for this panel
-        self.search_options = SearchOptions()
+        # for test deployment, use v1 by default
+        default_db_version = "v2" if os.environ.get("TEST_ENV", "0") == "0" else "v1"
+        # Initialize search options with default database version
+        self.search_options = SearchOptions(database_version=default_db_version)
         # Get the search input widget
         self.search_bar = pn.widgets.TextInput(
             name="Search",
@@ -69,10 +72,25 @@ class EphysPortal:
         # Update the streams panel when a row is selected
         self.results_panel.on_click(self.update_streams)
 
+        self.database_version_dropdown = pn.widgets.Select(
+            name="Database Version",
+            options=["v1", "v2"],
+            value=default_db_version, width=150
+        )
+        self.database_version_dropdown.param.watch(self.update_db_version, "value")
         self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
         self.refresh_button.on_click(self.update_results)
         # Initialize with current results
         self.update_results(None)
+
+    def update_db_version(self, event):
+        """Update the database version used for searching."""
+        if event.new != event.old:
+            new_version = event.new
+            print(f"Switching to database version: {new_version}")
+            self.search_options.database_version = new_version
+            self.search_options.update_options()
+            self.update_results(None)
 
     def update_results(self, event):
         """Update the results panel with the current search results."""
@@ -97,6 +115,7 @@ class EphysPortal:
         # Get the selected row data
         selected_row = self.results_panel.value.iloc[event.row]
         selected_name = selected_row["name"]
+        db_version = self.search_options.database_version
 
         # Find the corresponding record in the original data
         for record in self.search_options.all_records:
@@ -112,7 +131,7 @@ class EphysPortal:
                 stream_names = self.search_options.get_postprocessed_streams(location)
                 print(f"Found {len(stream_names)} postprocessed streams from {location}")
                 analyzer_base_location = record["location"]
-                raw_asset = get_raw_asset_by_name(asset_name)[0]
+                raw_asset = get_raw_asset_by_name(asset_name, version=db_version)[0]
                 links_url = []
                 for stream_name in stream_names:
                     raw_stream_name = stream_name[: stream_name.find("_recording")]
@@ -172,20 +191,19 @@ class EphysPortal:
         # and streams panel at the bottom
         col = pn.Column(
             pn.pane.Markdown("# AIND Ephys Portal", styles={"text-align": "center"}),
-            pn.Row(self.search_bar, self.refresh_button, align="center"),
+            pn.Row(self.search_bar, self.database_version_dropdown, align="center"),
+            self.refresh_button,
             pn.layout.Divider(),
             pn.pane.Markdown("## Search Results", styles={"text-align": "left"}),
             self.results_panel,
             pn.layout.Divider(),
             pn.pane.Markdown("## Postprocessed Streams", styles={"text-align": "left"}),
             self.streams_panel,
-            min_width=900,
-            max_width=1200,
-            sizing_mode="stretch_width",
+            min_width=1500,
             styles=OUTER_STYLE,
             align="center",
         )
-        display = pn.Row(pn.HSpacer(max_width=200), col, pn.HSpacer(max_width=200))
+        display = pn.Row(pn.HSpacer(), col, pn.HSpacer(), sizing_mode="stretch_width")
 
         return display
 
@@ -193,9 +211,10 @@ class EphysPortal:
 class SearchOptions(param.Parameterized):
     """Search options for the Ephys Portal."""
 
-    def __init__(self):
+    def __init__(self, database_version="v2"):
         """Initialize a search options object."""
         super().__init__()
+        self.database_version = database_version
 
         self.update_options()
 
@@ -208,7 +227,8 @@ class SearchOptions(param.Parameterized):
         data = []
         try:
             # Get initial data from database
-            self.all_records = get_all_ecephys_derived(additional_includes_in_name="sorted")
+            version = self.database_version
+            self.all_records = get_all_ecephys_derived(additional_includes_in_name="sorted", version=version)
             print(f"Loaded {len(self.all_records)} 'sorted' records.")
             # Process records into a list of dictionaries
             for record in self.all_records:

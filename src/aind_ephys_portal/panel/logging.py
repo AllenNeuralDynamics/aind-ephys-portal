@@ -2,6 +2,8 @@ import io
 import sys
 import contextvars
 from pathlib import Path
+import psutil
+import numpy as np
 
 import panel as pn
 
@@ -75,6 +77,19 @@ def list_sessions(skip_routes=None):
                 session_id = log_file.name
                 sessions[(route, session_id)] = log_file
     return sessions
+
+
+def list_gui_sessions():
+    """Helper to list only GUI sessions."""
+    return {k: v for k, v in list_sessions().items() if k[0] == "ephys_gui_app"}
+
+def get_max_number_of_gui_sessions():
+    # Estimate number of sessions per worker for health check.
+    SESSION_AVG_RAM_USAGE_GB = 2.5
+    TOTAL_RAM_GB = psutil.virtual_memory().total / (1024**3)
+    MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
+
+    return MAX_SESSIONS_PER_WORKER
 
 
 class MultiSessionTee(io.TextIOBase):
