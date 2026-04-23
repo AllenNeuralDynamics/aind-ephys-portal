@@ -72,8 +72,12 @@ class EphysPortal:
         # Update the streams panel when a row is selected
         self.results_panel.on_click(self.update_streams)
 
-        self.database_version = pn.widgets.Select(name="Database Version", options=["v1", "v2"], value="v2", width=150)
-        self.database_version.param.watch(self.update_db_version, "value")
+        self.database_version_dropdown = pn.widgets.Select(
+            name="Database Version",
+            options=["v1", "v2"],
+            value=default_db_version, width=150
+        )
+        self.database_version_dropdown.param.watch(self.update_db_version, "value")
         self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
         self.refresh_button.on_click(self.update_results)
         # Initialize with current results
@@ -111,6 +115,7 @@ class EphysPortal:
         # Get the selected row data
         selected_row = self.results_panel.value.iloc[event.row]
         selected_name = selected_row["name"]
+        db_version = self.search_options.database_version
 
         # Find the corresponding record in the original data
         for record in self.search_options.all_records:
@@ -126,7 +131,7 @@ class EphysPortal:
                 stream_names = self.search_options.get_postprocessed_streams(location)
                 print(f"Found {len(stream_names)} postprocessed streams from {location}")
                 analyzer_base_location = record["location"]
-                raw_asset = get_raw_asset_by_name(asset_name, version=self.database_version)[0]
+                raw_asset = get_raw_asset_by_name(asset_name, version=db_version)[0]
                 links_url = []
                 for stream_name in stream_names:
                     raw_stream_name = stream_name[: stream_name.find("_recording")]
@@ -186,7 +191,7 @@ class EphysPortal:
         # and streams panel at the bottom
         col = pn.Column(
             pn.pane.Markdown("# AIND Ephys Portal", styles={"text-align": "center"}),
-            pn.Row(self.search_bar, self.database_version, align="center"),
+            pn.Row(self.search_bar, self.database_version_dropdown, align="center"),
             self.refresh_button,
             pn.layout.Divider(),
             pn.pane.Markdown("## Search Results", styles={"text-align": "left"}),

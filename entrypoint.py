@@ -40,10 +40,16 @@ class HealthHandler(RequestHandler):
         task_id = get_ecs_task_id()
         if mem.percent > 70 or len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
             self.set_status(503)
-            self.write(f"Busy: Memory at {mem.percent}% - Num sessions: {len(gui_sessions)} - Task ID: {task_id}")
+            self.write(
+                f"Busy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
+            )
         else:
             self.set_status(200)
-            self.write(f"Healthy: Memory at {mem.percent}% - Num sessions: {len(gui_sessions)} - Task ID: {task_id}")
+            self.write(
+                f"Healthy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
+            )
 
 class IndexRedirectHandler(RequestHandler):
     def get(self):
@@ -82,6 +88,7 @@ if __name__ == "__main__":
     print(f"Ephys Portal is running on http://{address}:{port}")
     for app in apps:
         print(f" - {app}: http://{address}:{port}/{app}")
+    print(f" - Health check: http://{address}:{port}/health")
     pn.serve(
         apps,
         address=address,

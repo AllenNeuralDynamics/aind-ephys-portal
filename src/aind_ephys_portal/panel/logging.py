@@ -3,6 +3,7 @@ import sys
 import contextvars
 from pathlib import Path
 import psutil
+import numpy as np
 
 import panel as pn
 
