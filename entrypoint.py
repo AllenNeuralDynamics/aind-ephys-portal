@@ -1,8 +1,10 @@
 import os
 import shutil
+import threading
 from argparse import ArgumentParser
 
 import requests
+import numpy as np
 import psutil
 import panel as pn
 from tornado.web import RequestHandler
@@ -10,6 +12,10 @@ from tornado.web import RequestHandler
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403
 from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, LOG_DIR  # noqa: F401
+
+
+TARGET_MEMORY_TRIGGER_PERCENT = 70
+TARGET_CLEAR_TMP_ARR_SECONDS = 30
 
 
 if LOG_DIR.is_dir():
@@ -31,6 +37,16 @@ def get_ecs_task_id():
 MAX_GUI_SESSIONS_PER_TASK = get_max_number_of_gui_sessions()
 print(f"Max GUI sessions per task: {MAX_GUI_SESSIONS_PER_TASK}")
 
+_tmp_arr = None
+_tmp_arr_timer = None
+
+
+def _clear_tmp_arr():
+    global _tmp_arr, _tmp_arr_timer
+    _tmp_arr = None
+    _tmp_arr_timer = None
+    print(f"tmp_arr cleared after {TARGET_CLEAR_TMP_ARR_SECONDS}s")
+
 # 2. Health Check & Index Redirect
 class HealthHandler(RequestHandler):
     def get(self):
@@ -38,12 +54,32 @@ class HealthHandler(RequestHandler):
         # count number of GUI app sessions
         gui_sessions = list_gui_sessions()
         task_id = get_ecs_task_id()
-        if mem.percent > 70 or len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
-            self.set_status(503)
+        if mem.percent > TARGET_MEMORY_TRIGGER_PERCENT:
+            self.set_status(200)
             self.write(
                 f"Busy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
+        elif len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
+            self.set_status(200)
+            self.write(
+                f"Busy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
+            )
+            # create a numpy array in memory to trigger get to 70% memory usage for testing
+            # to make sure ECS is making a new task
+            # estimate size of array needed to trigger 70% memory usage based on total memory and current usage
+            global _tmp_arr, _tmp_arr_timer
+            if _tmp_arr_timer is not None:
+                _tmp_arr_timer.cancel()
+            total_memory = psutil.virtual_memory().total
+            used_memory = psutil.virtual_memory().used
+            target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
+            array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
+            _tmp_arr = np.zeros(array_size, dtype=np.float64)
+            _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
+            _tmp_arr_timer.daemon = True
+            _tmp_arr_timer.start()
         else:
             self.set_status(200)
             self.write(
