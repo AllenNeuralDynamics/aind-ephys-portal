@@ -1,9 +1,11 @@
 import io
+import os
 import sys
 import contextvars
 from pathlib import Path
 import psutil
 import numpy as np
+import requests
 
 import panel as pn
 
@@ -83,6 +85,19 @@ def list_gui_sessions():
     """Helper to list only GUI sessions."""
     return {k: v for k, v in list_sessions().items() if k[0] == "ephys_gui_app"}
 
+
+def get_ecs_task_id():
+    metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
+    if metadata_uri:
+        try:
+            response = requests.get(f"{metadata_uri}/task", timeout=2)
+            task_arn = response.json().get("TaskARN", "")
+            return task_arn.split("/")[-1]
+        except Exception:
+            pass
+    return "local-dev"
+
+
 def get_container_total_memory():
     """Return the container's memory limit in bytes, falling back to host total.
 
@@ -131,9 +146,13 @@ def get_container_used_memory():
 
 def get_max_number_of_gui_sessions():
     # Estimate number of sessions per worker for health check.
-    SESSION_AVG_RAM_USAGE_GB = 2
-    TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
-    MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
+    if "MAX_GUI_SESSIONS_PER_TASK" in os.environ:
+        print(f"Using MAX_GUI_SESSIONS_PER_TASK from environment: {os.environ['MAX_GUI_SESSIONS_PER_TASK']}")
+        MAX_SESSIONS_PER_WORKER = int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
+    else:
+        SESSION_AVG_RAM_USAGE_GB = 2
+        TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
+        MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
 
     return MAX_SESSIONS_PER_WORKER
 

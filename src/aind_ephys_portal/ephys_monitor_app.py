@@ -1,7 +1,13 @@
 import psutil
 import panel as pn
 
-from aind_ephys_portal.panel.logging import list_sessions, remove_session, get_container_total_memory, get_container_used_memory
+from aind_ephys_portal.panel.logging import (
+    list_sessions,
+    remove_session,
+    get_container_total_memory,
+    get_container_used_memory,
+    get_ecs_task_id,
+)
 
 pn.extension()
 
@@ -218,8 +224,9 @@ refresh_log_tabs()
 
 
 # --- App layout ---
+task_id = get_ecs_task_id()
 app = pn.Column(
-    pn.pane.Markdown("## AIND Ephys Monitor"),
+    pn.pane.Markdown(f"## AIND Ephys Monitor — Task ID: `{task_id}`"),
     pn.Row(ram_usage_label, ram_monitor),
     pn.Row(cpu_usage_label, cpu_monitor),
     pn.pane.Markdown("## Active Sessions"),

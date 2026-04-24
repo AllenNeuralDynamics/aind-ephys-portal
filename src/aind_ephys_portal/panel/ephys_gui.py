@@ -18,10 +18,14 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.curation import validate_curation_dict
 
 from aind_ephys_portal.panel.logging import (
-    setup_logging, local_log_context, get_max_number_of_gui_sessions, list_gui_sessions
+    setup_logging,
+    local_log_context,
+    get_max_number_of_gui_sessions,
+    list_gui_sessions,
+    get_ecs_task_id,
+    remove_session,
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
-
 
 displayed_unit_properties = [
     "decoder_label",
@@ -65,6 +69,7 @@ aind_layout = dict(
     zone8=["correlogram", "metrics", "mainsettings"],
 )
 
+
 def _malloc_trim():
     """Force glibc to return freed memory to the OS (Linux only)."""
     try:
@@ -75,7 +80,16 @@ def _malloc_trim():
 
 class EphysGuiView(param.Parameterized):
 
-    def __init__(self, analyzer_path, recording_path, identifier=None, fast_mode=False, preload_curation=False, **params):
+    def __init__(
+        self,
+        analyzer_path,
+        recording_path,
+        identifier=None,
+        fast_mode=False,
+        preload_curation=False,
+        session=None,
+        **params,
+    ):
         """Construct the QCPanel object"""
         super().__init__(**params)
 
@@ -97,20 +111,43 @@ class EphysGuiView(param.Parameterized):
 
         self.win = None
 
+        task_id = get_ecs_task_id()
+        header_str = ""
+        if session is not None:
+            session_name = session
+            header_str += f"**{session_name}** / "
+        stream_name = self._get_analyzer_stream_name(self.analyzer_path)
+        header_str += f"**{stream_name}**"
+        header_str += f" / `{task_id}`"
+        header = pn.pane.Markdown(
+            header_str,
+            sizing_mode="stretch_width",
+        )
+
         num_gui_sessions = len(list_gui_sessions())
         max_sessions = get_max_number_of_gui_sessions()
         if num_gui_sessions > max_sessions:
-            print(f"Current number of GUI sessions: {num_gui_sessions}. Max allowed per worker: {max_sessions}.")
+            # Remove this session from the count — it is being rejected
+            doc = pn.state.curdoc
+            route = getattr(doc, "_log_route", None)
+            session_id = getattr(doc, "_log_session_id", None)
+            if route and session_id:
+                remove_session(route, session_id)
+            print(
+                f"Current number of GUI sessions: {num_gui_sessions}. Max allowed per worker: {max_sessions}. Task ID: {task_id}"
+            )
             self.layout = pn.Column(
+                header,
                 pn.pane.Markdown(
                     f"⚠️ Too many active GUI sessions ({num_gui_sessions}). Max allowed per worker is {max_sessions}. "
-                    f"Please try again in a few minutes.",
+                    f"Please try again in a few minutes or open a new tab (Task ID: `{task_id}`).",
                     sizing_mode="stretch_both",
                 ),
                 sizing_mode="stretch_both",
             )
         elif self.analyzer_path != "":
             self.layout = pn.Column(
+                header,
                 self._create_main_window(),
                 sizing_mode="stretch_both",
             )
@@ -122,6 +159,7 @@ class EphysGuiView(param.Parameterized):
             self._init_cb = pn.state.add_periodic_callback(delayed_init, period=1500, count=1)
         else:
             self.layout = pn.Column(
+                header,
                 pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
@@ -140,8 +178,7 @@ class EphysGuiView(param.Parameterized):
     def create_submit_trigger(self):
         submit_trigger = pn.widgets.TextInput(value="", visible=False)
         # Add JavaScript callback that triggers when the TextInput value changes
-        submit_trigger.jscallback(
-            value="""
+        submit_trigger.jscallback(value="""
             // Extract just the JSON data (remove timestamp suffix)
             const dataStr = cb_obj.value;
 
@@ -160,10 +197,8 @@ class EphysGuiView(param.Parameterized):
                     console.error('Error sending data to parent:', error);
                 }}
             }}
-            """.format(identifier=self.identifier)
-        )
+            """.format(identifier=self.identifier))
         return submit_trigger
-
 
     def _curation_callback(self, curation_data):
         self.submit_trigger.value = json.dumps(curation_data)
@@ -182,7 +217,9 @@ class EphysGuiView(param.Parameterized):
         payload = (msg or {}).get("payload", {})
         identifier = payload.get("identifier", None)
         if identifier != self.identifier:
-            print(f"Received message for identifier {identifier}, but current identifier is {self.identifier}. Ignoring.")
+            print(
+                f"Received message for identifier {identifier}, but current identifier is {self.identifier}. Ignoring."
+            )
             return
 
         data_type = payload.get("type", None)
@@ -200,8 +237,18 @@ class EphysGuiView(param.Parameterized):
             return
         self.sigui_win.set_external_curation(curation_data)
 
+    @staticmethod
+    def _get_analyzer_stream_name(analyzer_path):
+        from pathlib import PurePosixPath
+
+        if not analyzer_path:
+            return "unknown", "unknown"
+        path = PurePosixPath(analyzer_path.rstrip("/"))
+        stream_name = path.name.replace(".zarr", "") or "unknown"
+        return stream_name
+
     def _initialize(self):
-        self.layout[0] = self.loading_banner
+        self.layout[1] = self.loading_banner
         self.log_output.value = ""
 
         initial_mem = psutil.virtual_memory()
@@ -234,7 +281,7 @@ class EphysGuiView(param.Parameterized):
                         self.fullscreen_listener = self.create_fullscreen_resize_listener()
 
                     self.win_layout = self._create_main_window()
-                    self.layout[0] = self.win_layout
+                    self.layout[1] = self.win_layout
                     if self.identifier is not None:
                         self.layout.append(self.submit_trigger)
                         self.layout.append(self.curation_listener)
@@ -251,8 +298,8 @@ class EphysGuiView(param.Parameterized):
 
             if error is not None:
                 print(f"Error during initialization: {error}")
-                if len(self.layout) > 0:
-                    self.layout[0] = pn.pane.Markdown(
+                if len(self.layout) > 1:
+                    self.layout[1] = pn.pane.Markdown(
                         f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both"
                     )
             else:
@@ -371,29 +418,46 @@ class EphysGuiView(param.Parameterized):
                 # zarr array references), spike indices, and the units table.
                 for attr in (
                     # template data
-                    "templates_average", "templates_std",
+                    "templates_average",
+                    "templates_std",
                     # positions / geometry
-                    "unit_positions", "visible_channel_inds",
+                    "unit_positions",
+                    "visible_channel_inds",
                     # quality / metrics
-                    "noise_levels", "metrics",
+                    "noise_levels",
+                    "metrics",
                     # spike-level arrays
-                    "spike_amplitudes", "amplitude_scalings", "spike_depths",
-                    "spikes", "random_spikes_indices", "segment_slices",
+                    "spike_amplitudes",
+                    "amplitude_scalings",
+                    "spike_depths",
+                    "spikes",
+                    "random_spikes_indices",
+                    "segment_slices",
                     "final_spike_samples",
-                    "_spike_index_by_units", "_spike_index_by_segment_and_units",
-                    "_spike_visible_indices", "_spike_selected_indices",
+                    "_spike_index_by_units",
+                    "_spike_index_by_segment_and_units",
+                    "_spike_visible_indices",
+                    "_spike_selected_indices",
                     # correlograms / ISI
-                    "correlograms", "correlograms_bins",
-                    "isi_histograms", "isi_bins",
+                    "correlograms",
+                    "correlograms_bins",
+                    "isi_histograms",
+                    "isi_bins",
                     # similarity
                     "_similarity_by_method",
                     # extension objects (hold zarr array refs — must clear before analyzer)
-                    "waveforms_ext", "pc_ext", "_pc_projections",
+                    "waveforms_ext",
+                    "pc_ext",
+                    "_pc_projections",
                     # misc
-                    "_extremum_channel", "_traces_cached", "units_table",
+                    "_extremum_channel",
+                    "_traces_cached",
+                    "units_table",
                     "_potential_merges",
                     # sparsity / signal handler
-                    "external_sparsity", "analyzer_sparsity", "signal_handler",
+                    "external_sparsity",
+                    "analyzer_sparsity",
+                    "signal_handler",
                 ):
                     try:
                         setattr(controller, attr, None)
@@ -494,7 +558,6 @@ class EphysGuiView(param.Parameterized):
             final_mem = psutil.virtual_memory()
             used = final_mem.used / (1024**3)
             print(f"\nRAM Usage after cleanup: {used:.2f} / {total_ram:.2f} GB\n")
-
 
     def panel(self):
         """Return the panel layout"""
