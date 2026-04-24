@@ -18,6 +18,10 @@ TARGET_MEMORY_TRIGGER_PERCENT = 75
 TARGET_CLEAR_TMP_ARR_SECONDS = 30
 
 
+TARGET_MEMORY_TRIGGER_PERCENT = 75
+TARGET_CLEAR_TMP_ARR_SECONDS = 30
+
+
 if LOG_DIR.is_dir():
     print(f"Cleaning up old log files in {LOG_DIR}...")
     shutil.rmtree(LOG_DIR)
