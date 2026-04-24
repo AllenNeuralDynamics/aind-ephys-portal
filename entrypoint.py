@@ -14,12 +14,8 @@ from aind_ephys_portal.setup import *  # noqa: F401,F403
 from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, get_container_total_memory, LOG_DIR  # noqa: F401
 
 
-TARGET_MEMORY_TRIGGER_PERCENT = 75
-TARGET_CLEAR_TMP_ARR_SECONDS = 30
-
-
-TARGET_MEMORY_TRIGGER_PERCENT = 75
-TARGET_CLEAR_TMP_ARR_SECONDS = 30
+TARGET_MEMORY_TRIGGER_PERCENT = 70
+TARGET_CLEAR_TMP_ARR_SECONDS = 180
 
 
 if LOG_DIR.is_dir():
@@ -58,13 +54,15 @@ class HealthHandler(RequestHandler):
     def get(self):
         global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered
         mem = psutil.virtual_memory()
+        container_total = get_container_total_memory()
+        mem_percent = mem.used / container_total * 100
         # count number of GUI app sessions
         gui_sessions = list_gui_sessions()
         task_id = get_ecs_task_id()
-        if mem.percent > TARGET_MEMORY_TRIGGER_PERCENT:
+        if mem_percent > TARGET_MEMORY_TRIGGER_PERCENT:
             self.set_status(200)
             self.write(
-                f"Busy (RAM Usage):\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Busy (RAM Usage):\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
         elif len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
@@ -75,7 +73,7 @@ class HealthHandler(RequestHandler):
             elif _tmp_array_triggered:
                 busy_msg += " (inflated memory released)"
             self.write(
-                f"Busy {busy_msg}:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
             # inflate RAM once per threshold-exceeded event so ECS spawns a new task
@@ -95,7 +93,7 @@ class HealthHandler(RequestHandler):
             _tmp_array_triggered = False
             self.set_status(200)
             self.write(
-                f"Healthy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
 
