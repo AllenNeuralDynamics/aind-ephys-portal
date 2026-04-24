@@ -108,6 +108,27 @@ def get_container_total_memory():
     return psutil.virtual_memory().total
 
 
+def get_container_used_memory():
+    """Return the container's current memory usage in bytes, falling back to host used.
+
+    Must read from the same cgroup as get_container_total_memory() — psutil reads
+    host-level /proc/meminfo, which produces the wrong array size in the inflation calc.
+    """
+    # cgroups v2
+    try:
+        with open("/sys/fs/cgroup/memory.current") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        pass
+    # cgroups v1
+    try:
+        with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        pass
+    return psutil.virtual_memory().used
+
+
 def get_max_number_of_gui_sessions():
     # Estimate number of sessions per worker for health check.
     SESSION_AVG_RAM_USAGE_GB = 2

@@ -11,7 +11,7 @@ from tornado.web import RequestHandler
 
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403
-from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, get_container_total_memory, LOG_DIR  # noqa: F401
+from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, get_container_total_memory, get_container_used_memory, LOG_DIR  # noqa: F401
 
 
 TARGET_MEMORY_TRIGGER_PERCENT = 70
@@ -80,7 +80,7 @@ class HealthHandler(RequestHandler):
             if _tmp_arr is None and not _tmp_array_triggered:
                 _tmp_array_triggered = True
                 total_memory = get_container_total_memory()
-                used_memory = psutil.virtual_memory().used
+                used_memory = get_container_used_memory()
                 target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
                 array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
                 if array_size > 0:
