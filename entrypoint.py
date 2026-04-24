@@ -10,8 +10,14 @@ from tornado.web import RequestHandler
 
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403
-from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, get_container_total_memory, get_container_used_memory, get_ecs_task_id, LOG_DIR  # noqa: F401
-
+from aind_ephys_portal.panel.logging import (
+    list_gui_sessions,
+    get_max_number_of_gui_sessions,
+    get_container_total_memory,
+    get_container_used_memory,
+    get_ecs_task_id,
+    LOG_DIR,
+)  # noqa: F401
 
 TARGET_MEMORY_TRIGGER_PERCENT = 70
 TARGET_CLEAR_TMP_ARR_SECONDS = 180
@@ -34,6 +40,7 @@ def _clear_tmp_arr():
     _tmp_arr_timer = None
     print(f"tmp_arr cleared after {TARGET_CLEAR_TMP_ARR_SECONDS}s")
 
+
 # 2. Health Check & Index Redirect
 class HealthHandler(RequestHandler):
     def get(self):
@@ -45,7 +52,7 @@ class HealthHandler(RequestHandler):
         gui_sessions = list_gui_sessions()
         task_id = get_ecs_task_id()
         max_gui_sessions = get_max_number_of_gui_sessions()
-        
+
         if mem_percent > TARGET_MEMORY_TRIGGER_PERCENT:
             self.set_status(200)
             self.write(
@@ -69,11 +76,17 @@ class HealthHandler(RequestHandler):
                 total_memory = get_container_total_memory()
                 used_memory = get_container_used_memory()
                 target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
-                array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
+                array_size = int(
+                    (target_memory - used_memory) / 8
+                )  # assuming float64 (8 bytes)
                 if array_size > 0:
-                    print(f"Inflating memory with array of size {array_size} to trigger ECS scaling")
+                    print(
+                        f"Inflating memory with array of size {array_size} to trigger ECS scaling"
+                    )
                     _tmp_arr = np.ones(array_size, dtype=np.float64)
-                    _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
+                    _tmp_arr_timer = threading.Timer(
+                        TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr
+                    )
                     _tmp_arr_timer.daemon = True
                     _tmp_arr_timer.start()
         else:
@@ -84,9 +97,11 @@ class HealthHandler(RequestHandler):
                 f"(max {max_gui_sessions}) Task ID: {task_id}"
             )
 
+
 class IndexRedirectHandler(RequestHandler):
     def get(self):
         self.redirect("/ephys_portal_app")
+
 
 # 3. App file paths — Panel will exec these per-session with a proper context
 APP_DIR = "src/aind_ephys_portal"
@@ -102,9 +117,20 @@ allow_ws = os.environ.get("ALLOW_WEBSOCKET_ORIGIN", "*").split(",")
 
 parser = ArgumentParser(description="Ephys Portal Server")
 parser.add_argument("--port", type=int, default=8000, help="Port to run the server on")
-parser.add_argument("--address", type=str, default="localhost", help="Address to run the server on")
-parser.add_argument("--test", action="store_true", help="Run in test mode (connects to test API gateway)")
-parser.add_argument("--max-sessions", type=int, default=None, help="Maximum number of GUI sessions per task")
+parser.add_argument(
+    "--address", type=str, default="localhost", help="Address to run the server on"
+)
+parser.add_argument(
+    "--test",
+    action="store_true",
+    help="Run in test mode (connects to test API gateway)",
+)
+parser.add_argument(
+    "--max-sessions",
+    type=int,
+    default=None,
+    help="Maximum number of GUI sessions per task",
+)
 
 
 if __name__ == "__main__":
