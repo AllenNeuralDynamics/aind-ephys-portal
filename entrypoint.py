@@ -37,6 +37,7 @@ def get_ecs_task_id():
 MAX_GUI_SESSIONS_PER_TASK = get_max_number_of_gui_sessions()
 print(f"Max GUI sessions per task: {MAX_GUI_SESSIONS_PER_TASK}")
 
+_tmp_array_triggered = False
 _tmp_arr = None
 _tmp_arr_timer = None
 
@@ -57,30 +58,35 @@ class HealthHandler(RequestHandler):
         if mem.percent > TARGET_MEMORY_TRIGGER_PERCENT:
             self.set_status(200)
             self.write(
-                f"Busy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Busy (RAM Usage):\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
         elif len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
             self.set_status(200)
+            global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered
+            busy_msg = "(MAX SESSIONS EXCEEDED)"
+            if _tmp_arr is not None:
+                busy_msg += " (inflating memory to trigger new ECS task)"
+            elif _tmp_array_triggered:
+                busy_msg += " (memory already inflated)"
             self.write(
-                f"Busy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Busy{busy_msg}:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
-            # create a numpy array in memory to trigger get to 70% memory usage for testing
-            # to make sure ECS is making a new task
-            # estimate size of array needed to trigger 70% memory usage based on total memory and current usage
-            global _tmp_arr, _tmp_arr_timer
-            if _tmp_arr_timer is not None:
-                _tmp_arr_timer.cancel()
-            total_memory = psutil.virtual_memory().total
-            used_memory = psutil.virtual_memory().used
-            target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
-            array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
-            _tmp_arr = np.zeros(array_size, dtype=np.float64)
-            _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
-            _tmp_arr_timer.daemon = True
-            _tmp_arr_timer.start()
+            # inflate RAM once per threshold-exceeded event so ECS spawns a new task
+            if _tmp_arr is None and not _tmp_array_triggered:
+                _tmp_array_triggered = True
+                total_memory = psutil.virtual_memory().total
+                used_memory = psutil.virtual_memory().used
+                target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
+                array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
+                _tmp_arr = np.zeros(array_size, dtype=np.float64)
+                _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
+                _tmp_arr_timer.daemon = True
+                _tmp_arr_timer.start()
         else:
+            global _tmp_array_triggered
+            _tmp_array_triggered = False
             self.set_status(200)
             self.write(
                 f"Healthy:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
