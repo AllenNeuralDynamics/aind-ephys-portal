@@ -14,7 +14,7 @@ from aind_ephys_portal.setup import *  # noqa: F401,F403
 from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, LOG_DIR  # noqa: F401
 
 
-TARGET_MEMORY_TRIGGER_PERCENT = 70
+TARGET_MEMORY_TRIGGER_PERCENT = 75
 TARGET_CLEAR_TMP_ARR_SECONDS = 30
 
 
@@ -44,6 +44,7 @@ _tmp_arr_timer = None
 
 def _clear_tmp_arr():
     global _tmp_arr, _tmp_arr_timer
+    print("Clearing temporary array to free up memory...")
     _tmp_arr = None
     _tmp_arr_timer = None
     print(f"tmp_arr cleared after {TARGET_CLEAR_TMP_ARR_SECONDS}s")
@@ -51,6 +52,7 @@ def _clear_tmp_arr():
 # 2. Health Check & Index Redirect
 class HealthHandler(RequestHandler):
     def get(self):
+        global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered
         mem = psutil.virtual_memory()
         # count number of GUI app sessions
         gui_sessions = list_gui_sessions()
@@ -63,14 +65,13 @@ class HealthHandler(RequestHandler):
             )
         elif len(gui_sessions) > MAX_GUI_SESSIONS_PER_TASK:
             self.set_status(200)
-            global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered
             busy_msg = "(MAX SESSIONS EXCEEDED)"
             if _tmp_arr is not None:
-                busy_msg += " (inflating memory to trigger new ECS task)"
+                busy_msg += " (inflating memory)"
             elif _tmp_array_triggered:
-                busy_msg += " (memory already inflated)"
+                busy_msg += " (inflated memory released)"
             self.write(
-                f"Busy{busy_msg}:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
+                f"Busy {busy_msg}:\nMemory at {mem.percent}% - Num sessions: {len(gui_sessions)} "
                 f"(max {MAX_GUI_SESSIONS_PER_TASK}) Task ID: {task_id}"
             )
             # inflate RAM once per threshold-exceeded event so ECS spawns a new task
@@ -80,12 +81,12 @@ class HealthHandler(RequestHandler):
                 used_memory = psutil.virtual_memory().used
                 target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
                 array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
-                _tmp_arr = np.zeros(array_size, dtype=np.float64)
+                _tmp_arr = np.ones(array_size, dtype=np.float64)
+                print(f"Inflated memory with array of size {array_size} to trigger ECS scaling")
                 _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
                 _tmp_arr_timer.daemon = True
                 _tmp_arr_timer.start()
         else:
-            global _tmp_array_triggered
             _tmp_array_triggered = False
             self.set_status(200)
             self.write(
