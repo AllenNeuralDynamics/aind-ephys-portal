@@ -83,10 +83,35 @@ def list_gui_sessions():
     """Helper to list only GUI sessions."""
     return {k: v for k, v in list_sessions().items() if k[0] == "ephys_gui_app"}
 
+def get_container_total_memory():
+    """Return the container's memory limit in bytes, falling back to host total.
+
+    psutil.virtual_memory().total reads /proc/meminfo (host RAM), which is wrong
+    inside ECS/Docker containers that have a lower memory limit set via cgroups.
+    """
+    # cgroups v2
+    try:
+        with open("/sys/fs/cgroup/memory.max") as f:
+            val = f.read().strip()
+            if val != "max":
+                return int(val)
+    except (FileNotFoundError, ValueError):
+        pass
+    # cgroups v1
+    try:
+        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as f:
+            val = int(f.read().strip())
+            if val < 2**62:  # sentinel value meaning "no limit"
+                return val
+    except (FileNotFoundError, ValueError):
+        pass
+    return psutil.virtual_memory().total
+
+
 def get_max_number_of_gui_sessions():
     # Estimate number of sessions per worker for health check.
     SESSION_AVG_RAM_USAGE_GB = 2
-    TOTAL_RAM_GB = psutil.virtual_memory().total / (1024**3)
+    TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
     MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
 
     return MAX_SESSIONS_PER_WORKER
