@@ -85,7 +85,7 @@ def list_gui_sessions():
 
 def get_max_number_of_gui_sessions():
     # Estimate number of sessions per worker for health check.
-    SESSION_AVG_RAM_USAGE_GB = 2.5
+    SESSION_AVG_RAM_USAGE_GB = 2
     TOTAL_RAM_GB = psutil.virtual_memory().total / (1024**3)
     MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
 
