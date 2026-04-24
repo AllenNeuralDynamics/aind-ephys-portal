@@ -11,7 +11,11 @@ from tornado.web import RequestHandler
 
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403
-from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, LOG_DIR  # noqa: F401
+from aind_ephys_portal.panel.logging import list_gui_sessions, get_max_number_of_gui_sessions, get_container_total_memory, LOG_DIR  # noqa: F401
+
+
+TARGET_MEMORY_TRIGGER_PERCENT = 75
+TARGET_CLEAR_TMP_ARR_SECONDS = 30
 
 
 TARGET_MEMORY_TRIGGER_PERCENT = 75
@@ -77,15 +81,16 @@ class HealthHandler(RequestHandler):
             # inflate RAM once per threshold-exceeded event so ECS spawns a new task
             if _tmp_arr is None and not _tmp_array_triggered:
                 _tmp_array_triggered = True
-                total_memory = psutil.virtual_memory().total
+                total_memory = get_container_total_memory()
                 used_memory = psutil.virtual_memory().used
                 target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
                 array_size = int((target_memory - used_memory) / 8)  # assuming float64 (8 bytes)
-                _tmp_arr = np.ones(array_size, dtype=np.float64)
-                print(f"Inflated memory with array of size {array_size} to trigger ECS scaling")
-                _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
-                _tmp_arr_timer.daemon = True
-                _tmp_arr_timer.start()
+                if array_size > 0:
+                    print(f"Inflating memory with array of size {array_size} to trigger ECS scaling")
+                    _tmp_arr = np.ones(array_size, dtype=np.float64)
+                    _tmp_arr_timer = threading.Timer(TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr)
+                    _tmp_arr_timer.daemon = True
+                    _tmp_arr_timer.start()
         else:
             _tmp_array_triggered = False
             self.set_status(200)

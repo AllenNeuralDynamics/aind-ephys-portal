@@ -1,7 +1,7 @@
 import psutil
 import panel as pn
 
-from aind_ephys_portal.panel.logging import list_sessions, remove_session
+from aind_ephys_portal.panel.logging import list_sessions, remove_session, get_container_total_memory
 
 pn.extension()
 
@@ -9,9 +9,10 @@ pn.extension()
 # --- Memory info ---
 def get_mem_info():
     mem = psutil.virtual_memory()
+    container_total = get_container_total_memory()
     used_gb = mem.used / (1024**3)
-    total_gb = mem.total / (1024**3)
-    percent = mem.percent
+    total_gb = container_total / (1024**3)
+    percent = mem.used / container_total * 100
     return used_gb, total_gb, percent
 
 
