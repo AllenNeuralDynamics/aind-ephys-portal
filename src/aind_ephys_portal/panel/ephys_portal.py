@@ -1,4 +1,5 @@
 """Main Panel application for the AIND SIGUI Portal."""
+
 import os
 import param
 import panel as pn
@@ -73,9 +74,7 @@ class EphysPortal:
         self.results_panel.on_click(self.update_streams)
 
         self.database_version_dropdown = pn.widgets.Select(
-            name="Database Version",
-            options=["v1", "v2"],
-            value=default_db_version, width=150
+            name="Database Version", options=["v1", "v2"], value=default_db_version, width=150
         )
         self.database_version_dropdown.param.watch(self.update_db_version, "value")
         self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
@@ -145,7 +144,9 @@ class EphysPortal:
                     if not analyzer_path.endswith(".zarr"):
                         link_url = "Only Zarr files are supported."
                     else:
-                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, False).replace("#", "%23")
+                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, asset_name).replace(
+                            "#", "%23"
+                        )
                     links_url.append(link_url)
                 links = []
                 for link in links_url:
