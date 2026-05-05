@@ -298,8 +298,13 @@ class EphysGuiView(param.Parameterized):
 
             if error is not None:
                 print(f"Error during initialization: {error}")
+<<<<<<< HEAD
                 if len(self.layout) > 1:
                     self.layout[1] = pn.pane.Markdown(
+=======
+                if len(self.layout) > 0:
+                    self.layout[0] = pn.pane.Markdown(
+>>>>>>> 3ee2f7a88b16f6ba0b7718afc01f2ae747b12290
                         f"⚠️ Error during initialization: {error}", sizing_mode="stretch_both"
                     )
             else:
