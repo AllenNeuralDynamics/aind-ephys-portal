@@ -21,6 +21,7 @@ from aind_ephys_portal.panel.logging import (
 
 TARGET_MEMORY_TRIGGER_PERCENT = 70
 TARGET_CLEAR_TMP_ARR_SECONDS = 180
+TARGET_INFLATE_DELAY_SECONDS = 90
 
 
 if LOG_DIR.is_dir():
@@ -31,6 +32,7 @@ if LOG_DIR.is_dir():
 _tmp_array_triggered = False
 _tmp_arr = None
 _tmp_arr_timer = None
+_inflate_delay_timer = None
 
 
 def _clear_tmp_arr():
@@ -41,10 +43,31 @@ def _clear_tmp_arr():
     print(f"tmp_arr cleared after {TARGET_CLEAR_TMP_ARR_SECONDS}s")
 
 
+def _inflate_memory():
+    global _tmp_arr, _tmp_arr_timer, _inflate_delay_timer
+    _inflate_delay_timer = None
+    total_memory = get_container_total_memory()
+    used_memory = get_container_used_memory()
+    target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
+    array_size = int(
+        (target_memory - used_memory) / 8
+    )  # assuming float64 (8 bytes)
+    if array_size > 0:
+        print(
+            f"Inflating memory with array of size {array_size} to trigger ECS scaling"
+        )
+        _tmp_arr = np.ones(array_size, dtype=np.float64)
+        _tmp_arr_timer = threading.Timer(
+            TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr
+        )
+        _tmp_arr_timer.daemon = True
+        _tmp_arr_timer.start()
+
+
 # 2. Health Check & Index Redirect
 class HealthHandler(RequestHandler):
     def get(self):
-        global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered
+        global _tmp_arr, _tmp_arr_timer, _tmp_array_triggered, _inflate_delay_timer
         total_memory = get_container_total_memory()
         used_memory = get_container_used_memory()
         mem_percent = used_memory / total_memory * 100
@@ -61,36 +84,34 @@ class HealthHandler(RequestHandler):
             )
         elif len(gui_sessions) >= max_gui_sessions:
             self.set_status(200)
+            # inflate RAM once per threshold-exceeded event so ECS spawns a new task;
+            # wait TARGET_INFLATE_DELAY_SECONDS first so existing sessions finish loading
+            if _tmp_arr is None and _inflate_delay_timer is None and not _tmp_array_triggered:
+                _tmp_array_triggered = True
+                print(
+                    f"Max sessions reached, will inflate memory in {TARGET_INFLATE_DELAY_SECONDS}s"
+                )
+                _inflate_delay_timer = threading.Timer(
+                    TARGET_INFLATE_DELAY_SECONDS, _inflate_memory
+                )
+                _inflate_delay_timer.daemon = True
+                _inflate_delay_timer.start()
             busy_msg = "(MAX SESSIONS REACHED)"
             if _tmp_arr is not None:
                 busy_msg += " (inflating memory)"
+            elif _inflate_delay_timer is not None:
+                busy_msg += " (waiting to inflate memory)"
             elif _tmp_array_triggered:
                 busy_msg += " (inflated memory released)"
             self.write(
                 f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
                 f"(max {max_gui_sessions}) Task ID: {task_id}"
             )
-            # inflate RAM once per threshold-exceeded event so ECS spawns a new task
-            if _tmp_arr is None and not _tmp_array_triggered:
-                _tmp_array_triggered = True
-                total_memory = get_container_total_memory()
-                used_memory = get_container_used_memory()
-                target_memory = total_memory * TARGET_MEMORY_TRIGGER_PERCENT / 100
-                array_size = int(
-                    (target_memory - used_memory) / 8
-                )  # assuming float64 (8 bytes)
-                if array_size > 0:
-                    print(
-                        f"Inflating memory with array of size {array_size} to trigger ECS scaling"
-                    )
-                    _tmp_arr = np.ones(array_size, dtype=np.float64)
-                    _tmp_arr_timer = threading.Timer(
-                        TARGET_CLEAR_TMP_ARR_SECONDS, _clear_tmp_arr
-                    )
-                    _tmp_arr_timer.daemon = True
-                    _tmp_arr_timer.start()
         else:
             _tmp_array_triggered = False
+            if _inflate_delay_timer is not None:
+                _inflate_delay_timer.cancel()
+                _inflate_delay_timer = None
             self.set_status(200)
             self.write(
                 f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
