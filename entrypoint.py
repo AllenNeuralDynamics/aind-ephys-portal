@@ -59,9 +59,9 @@ class HealthHandler(RequestHandler):
                 f"Busy (RAM Usage):\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
                 f"(max {max_gui_sessions}) Task ID: {task_id}"
             )
-        elif len(gui_sessions) > max_gui_sessions:
+        elif len(gui_sessions) >= max_gui_sessions:
             self.set_status(200)
-            busy_msg = "(MAX SESSIONS EXCEEDED)"
+            busy_msg = "(MAX SESSIONS REACHED)"
             if _tmp_arr is not None:
                 busy_msg += " (inflating memory)"
             elif _tmp_array_triggered:
