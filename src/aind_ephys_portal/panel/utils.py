@@ -3,8 +3,7 @@ import panel as pn
 from panel.param import param
 from panel.custom import ReactComponent
 
-
-EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}&preload_curation=true"
+EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}&session={}&preload_curation=true"
 
 
 AIND_COLORS = colors = {
@@ -56,7 +55,6 @@ def format_css_background():
     }}
     """
     pn.config.raw_css.append(BACKGROUND_CSS)  # type: ignore
-
 
 
 class FullscreenResizeHandler(ReactComponent):
@@ -130,6 +128,7 @@ class PostMessageListener(ReactComponent):
     Listen to window.postMessage events and forward them to Python via on_msg().
     This avoids ReactiveHTML/Bokeh 'source' linkage issues.
     """
+
     _model_name = "PostMessageListener"
     _model_module = "post_message_listener"
     _model_module_version = "0.0.1"

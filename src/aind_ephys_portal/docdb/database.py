@@ -6,26 +6,35 @@ from typing import List, Dict, Any
 import panel as pn
 from aind_data_access_api.document_db import MetadataDbClient
 
+TEST_ENV = os.environ.get("TEST_ENV", "0") == "1"
+
 # Constants for database connection
-API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", "api.allenneuraldynamics.org")
+default_api_gateway_host = "api.allenneuraldynamics-test.org" if TEST_ENV else "api.allenneuraldynamics.org"
+API_GATEWAY_HOST = os.environ.get("API_GATEWAY_HOST", default_api_gateway_host)
 DATABASE = os.environ.get("DATABASE", "metadata_index")
 COLLECTION = os.environ.get("COLLECTION", "data_assets")
 
 # Timeouts
-TIMEOUT_1M = 60
 TIMEOUT_1H = 60 * 60
-TIMEOUT_24H = 60 * 60 * 24
 
 # Initialize the client
-client = MetadataDbClient(
+client_v1 = MetadataDbClient(
     host=API_GATEWAY_HOST,
     database=DATABASE,
     collection=COLLECTION,
+    version="v1",
+)
+
+client_v2 = MetadataDbClient(
+    host=API_GATEWAY_HOST,
+    database=DATABASE,
+    collection=COLLECTION,
+    version="v2",
 )
 
 
 @pn.cache()
-def get_name_from_id(id: str):
+def get_name_from_id(id: str, version: str = "v2") -> str:
     """Get the name field from a record with the given ID.
 
     Parameters
@@ -38,6 +47,7 @@ def get_name_from_id(id: str):
     str
         The name field from the record.
     """
+    client = client_v1 if version == "v1" else client_v2
     response = client.aggregate_docdb_records(pipeline=[{"$match": {"_id": id}}, {"$project": {"name": 1, "_id": 0}}])
     return response[0]["name"]
 
@@ -81,7 +91,7 @@ def get_asset_by_name(asset_name: str):
 
 
 @pn.cache(ttl=TIMEOUT_1H)
-def get_raw_asset_by_name(asset_name: str):
+def get_raw_asset_by_name(asset_name: str, version: str = "v2"):
     """Get all assets that match a given asset name pattern.
 
     Parameters
@@ -95,6 +105,7 @@ def get_raw_asset_by_name(asset_name: str):
         List of matching asset records.
     """
     raw_name = _raw_name_from_derived(asset_name)
+    client = client_v1 if version == "v1" else client_v2
     response = client.retrieve_docdb_records(
         filter_query={"name": {"$regex": raw_name, "$options": "i"}, "data_description.data_level": "raw"}, limit=0
     )
@@ -102,7 +113,9 @@ def get_raw_asset_by_name(asset_name: str):
 
 
 @pn.cache(ttl=TIMEOUT_1H)
-def get_all_ecephys_derived(additional_includes_in_name: str | None = None) -> List[Dict[str, Any]]:
+def get_all_ecephys_derived(
+    additional_includes_in_name: str | None = None, version: str = "v2"
+) -> List[Dict[str, Any]]:
     """Get a limited set of all records from the database.
 
     Returns
@@ -113,6 +126,7 @@ def get_all_ecephys_derived(additional_includes_in_name: str | None = None) -> L
         Comma-separated list of additional fields to include in the results, by default None
     """
     filter_query = {"data_description.modality.abbreviation": "ecephys", "data_description.data_level": "derived"}
+    client = client_v1 if version == "v1" else client_v2
     responses = client.retrieve_docdb_records(
         filter_query=filter_query,
     )

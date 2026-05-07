@@ -1,17 +1,24 @@
 import psutil
 import panel as pn
 
-from aind_ephys_portal.panel.logging import list_sessions, remove_session
+from aind_ephys_portal.panel.logging import (
+    list_sessions,
+    remove_session,
+    get_container_total_memory,
+    get_container_used_memory,
+    get_ecs_task_id,
+)
 
 pn.extension()
 
 
 # --- Memory info ---
 def get_mem_info():
-    mem = psutil.virtual_memory()
-    used_gb = mem.used / (1024**3)
-    total_gb = mem.total / (1024**3)
-    percent = mem.percent
+    container_total = get_container_total_memory()
+    container_used = get_container_used_memory()
+    used_gb = container_used / (1024**3)
+    total_gb = container_total / (1024**3)
+    percent = container_used / container_total * 100
     return used_gb, total_gb, percent
 
 
@@ -217,8 +224,9 @@ refresh_log_tabs()
 
 
 # --- App layout ---
+task_id = get_ecs_task_id()
 app = pn.Column(
-    pn.pane.Markdown("## AIND Ephys Monitor"),
+    pn.pane.Markdown(f"## AIND Ephys Monitor — Task ID: `{task_id}`"),
     pn.Row(ram_usage_label, ram_monitor),
     pn.Row(cpu_usage_label, cpu_monitor),
     pn.pane.Markdown("## Active Sessions"),
