@@ -233,9 +233,10 @@ class SearchOptions(param.Parameterized):
             print(f"Loaded {len(self.all_records)} 'sorted' records.")
             # Process records into a list of dictionaries
             for record in self.all_records:
+                created_str = "_created" if version == "v2" else "created"
                 r = {
                     "name": record.get("name", ""),
-                    "date": record.get("created", ""),
+                    "date": record.get(created_str, ""),
                     "id": record.get("_id", ""),
                     "location": record.get("location", ""),
                 }
