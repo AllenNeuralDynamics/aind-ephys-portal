@@ -26,9 +26,6 @@ RUN pip install wavpack-numcodecs
 # Install spikeinterface from source
 RUN pip install spikeinterface==0.104.1
 
-# Force scikit-learn to 1.6.1 to avoid issues with newer versions
-RUN pip install scikit-learn==1.6.1
-
 # Install spikeinterface-gui from source
 RUN pip install spikeinterface-gui==0.13.1
 

@@ -125,7 +125,13 @@ def get_all_ecephys_derived(
     additional_includes_in_name : str, optional
         Comma-separated list of additional fields to include in the results, by default None
     """
-    filter_query = {"data_description.modality.abbreviation": "ecephys", "data_description.data_level": "derived"}
+    filter_query = {
+        "$or": [
+            {"data_description.modality.abbreviation": "ecephys"},
+            {"data_description.modalities.abbreviation": "ecephys"},
+        ],
+        "data_description.data_level": "derived",
+    }
     client = client_v1 if version == "v1" else client_v2
     responses = client.retrieve_docdb_records(
         filter_query=filter_query,
