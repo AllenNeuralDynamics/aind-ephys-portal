@@ -23,9 +23,18 @@ from aind_ephys_portal.panel.logging import (
     get_max_number_of_gui_sessions,
     list_gui_sessions,
     get_ecs_task_id,
+    get_container_total_memory,
+    get_container_used_memory,
     remove_session,
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
+
+# Refuse to admit a new session if the task's RAM is already above this percent,
+# regardless of how many sessions are active. Protects "poisoned" tasks
+# (residue from prior sessions) from being pushed into OOM by the count-based
+# admission rule. Picked below the /health 503 recycle threshold so the ALB
+# pulls the task out of rotation before the GUI starts rejecting.
+MAX_RAM_PERCENT_FOR_NEW_SESSION = 55
 
 displayed_unit_properties = [
     "decoder_label",
@@ -78,6 +87,47 @@ def _malloc_trim():
         pass
 
 
+def _clear_fsspec_instance_caches():
+    """Drop cached fsspec filesystem instances and their internal block buffers.
+
+    fsspec keeps every filesystem ever constructed in AbstractFileSystem._cache,
+    so per-instance invalidate_cache() (dir listings) doesn't release the FS
+    itself or its dircache/block buffers. We only drop instances with no other
+    referrers to avoid stealing FS objects from concurrent sessions.
+    """
+    try:
+        import sys
+        from fsspec import AbstractFileSystem
+    except Exception:
+        return
+
+    cache = getattr(AbstractFileSystem, "_cache", None)
+    if not cache:
+        return
+
+    # 2 = the local var here + sys.getrefcount's own arg ref → no external holders.
+    # If anything else has a handle, leave it alone.
+    removed = 0
+    for key in list(cache.keys()):
+        fs = cache.get(key)
+        if fs is None:
+            continue
+        if sys.getrefcount(fs) <= 3:  # cache dict + local + getrefcount arg
+            try:
+                # Drop any caches the FS exposes before dropping the FS.
+                for attr in ("dircache", "_intrans", "_open_files"):
+                    try:
+                        getattr(fs, attr, {}).clear()
+                    except Exception:
+                        pass
+                del cache[key]
+                removed += 1
+            except Exception:
+                pass
+    if removed:
+        print(f"Dropped {removed} idle fsspec filesystem instance(s) from cache.")
+
+
 class EphysGuiView(param.Parameterized):
 
     def __init__(
@@ -126,20 +176,26 @@ class EphysGuiView(param.Parameterized):
 
         num_gui_sessions = len(list_gui_sessions())
         max_sessions = get_max_number_of_gui_sessions()
-        if num_gui_sessions > max_sessions:
+        ram_percent = get_container_used_memory() / get_container_total_memory() * 100
+        too_many_sessions = num_gui_sessions > max_sessions
+        too_much_ram = ram_percent > MAX_RAM_PERCENT_FOR_NEW_SESSION
+        if too_many_sessions or too_much_ram:
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
             session_id = getattr(doc, "_log_session_id", None)
             if route and session_id:
                 remove_session(route, session_id)
-            print(
-                f"Current number of GUI sessions: {num_gui_sessions}. Max allowed per worker: {max_sessions}. Task ID: {task_id}"
+            reason = (
+                f"too many sessions ({num_gui_sessions}/{max_sessions})"
+                if too_many_sessions
+                else f"task RAM already at {ram_percent:.1f}% (limit {MAX_RAM_PERCENT_FOR_NEW_SESSION}%)"
             )
+            print(f"Rejecting new session: {reason}. Task ID: {task_id}")
             self.layout = pn.Column(
                 header,
                 pn.pane.Markdown(
-                    f"⚠️ Too many active GUI sessions ({num_gui_sessions}). Max allowed per worker is {max_sessions}. "
+                    f"⚠️ Cannot start a new GUI session: {reason}. "
                     f"Please try again in a few minutes or open a new tab (Task ID: `{task_id}`).",
                     sizing_mode="stretch_both",
                 ),
@@ -543,6 +599,8 @@ class EphysGuiView(param.Parameterized):
             def _deferred_gc():
                 gc.collect()
                 gc.collect()
+                _clear_fsspec_instance_caches()
+                gc.collect()
                 _malloc_trim()
                 final_mem = psutil.virtual_memory()
                 used = final_mem.used / (1024**3)
@@ -553,6 +611,8 @@ class EphysGuiView(param.Parameterized):
         except Exception:
             # Fallback: run immediately if IOLoop is unavailable
             gc.collect()
+            gc.collect()
+            _clear_fsspec_instance_caches()
             gc.collect()
             _malloc_trim()
             final_mem = psutil.virtual_memory()

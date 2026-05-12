@@ -30,6 +30,10 @@ RUN pip install spikeinterface==0.104.1
 RUN pip install spikeinterface-gui==0.13.1
 
 ENV PYTHONUNBUFFERED=1
+# Limit glibc malloc arenas to reduce per-thread heap fragmentation.
+# Default is 8 * NCPU; with numpy/zarr large alloc + free patterns this
+# leaves freed pages stranded across many arenas, inflating RSS.
+ENV MALLOC_ARENA_MAX=2
 
 EXPOSE 8000
 ENTRYPOINT ["python", "entrypoint.py", "--address", "0.0.0.0", "--port", "8000"]
