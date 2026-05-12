@@ -150,7 +150,7 @@ def get_max_number_of_gui_sessions():
         print(f"Using MAX_GUI_SESSIONS_PER_TASK from environment: {os.environ['MAX_GUI_SESSIONS_PER_TASK']}")
         MAX_SESSIONS_PER_WORKER = int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
     else:
-        SESSION_AVG_RAM_USAGE_GB = 6
+        SESSION_AVG_RAM_USAGE_GB = 2
         TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
         MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
 
