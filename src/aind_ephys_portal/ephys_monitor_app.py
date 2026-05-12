@@ -227,22 +227,27 @@ refresh_log_tabs()
 # --- Process table (htop-like) ---
 def get_process_table():
     """Collect per-process info into a DataFrame."""
+    container_total = get_container_total_memory()
     rows = []
-    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "status"]):
+    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "status"]):
         try:
             info = proc.info
+            rss = proc.memory_info().rss
+            rss_gb = rss / (1024**3)
+            mem_pct = rss / container_total * 100 if container_total else 0.0
             rows.append(
                 {
                     "PID": info["pid"],
                     "Name": info["name"] or "",
                     "CPU %": round(info["cpu_percent"] or 0.0, 1),
-                    "Memory %": round(info["memory_percent"] or 0.0, 1),
+                    "RAM (GB)": round(rss_gb, 2),
+                    "Memory %": round(mem_pct, 1),
                     "Status": info["status"] or "",
                 }
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-    df = pd.DataFrame(rows, columns=["PID", "Name", "CPU %", "Memory %", "Status"])
+    df = pd.DataFrame(rows, columns=["PID", "Name", "CPU %", "RAM (GB)", "Memory %", "Status"])
     return df.sort_values("CPU %", ascending=False).reset_index(drop=True)
 
 
