@@ -1,16 +1,25 @@
+import gc
 import os
 import shutil
 import threading
+import tracemalloc
 from argparse import ArgumentParser
+from collections import Counter
 
 import numpy as np
 import psutil
 import panel as pn
 from tornado.web import RequestHandler
 
+# Start tracemalloc as early as possible so allocation tracebacks include the
+# session-loading code paths. Frame depth 10 is enough to identify the call site
+# inside spikeinterface/zarr/fsspec without blowing up memory overhead.
+tracemalloc.start(10)
+_tracemalloc_baseline = tracemalloc.take_snapshot()
+
 # 1. Run setup (replaces --setup flag)
-from aind_ephys_portal.setup import *  # noqa: F401,F403
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
+from aind_ephys_portal.panel.logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
     get_container_total_memory,
@@ -22,6 +31,13 @@ from aind_ephys_portal.panel.logging import (
 TARGET_MEMORY_TRIGGER_PERCENT = 70
 TARGET_CLEAR_TMP_ARR_SECONDS = 180
 TARGET_INFLATE_DELAY_SECONDS = 90
+
+# Recycle signal: when a task is sitting idle (0 GUI sessions) but its RAM
+# stays above this percent, /health returns 503 so the ALB deregisters it and
+# the ECS service scheduler replaces it. Baseline (no sessions, fresh start)
+# is ~10%, so 40% means tolerating ~30 points of accumulated residue before
+# recycling. Only triggers with 0 sessions, so user sessions are never cut.
+RECYCLE_RAM_PERCENT_WHEN_IDLE = 40
 
 
 if LOG_DIR.is_dir():
@@ -76,6 +92,16 @@ class HealthHandler(RequestHandler):
         task_id = get_ecs_task_id()
         max_gui_sessions = get_max_number_of_gui_sessions()
 
+        # Idle-but-bloated → ask ALB to deregister so ECS replaces us.
+        # GUI-level enforcement protects against admitting too many sessions,
+        # but only the load balancer can take a leaky task out of rotation.
+        if len(gui_sessions) == 0 and mem_percent > RECYCLE_RAM_PERCENT_WHEN_IDLE:
+            self.set_status(503)
+            self.write(
+                f"Unhealthy (recycle): Memory at {mem_percent:.1f}% with 0 sessions - Task ID: {task_id}"
+            )
+            return
+
         if mem_percent > TARGET_MEMORY_TRIGGER_PERCENT:
             self.set_status(200)
             self.write(
@@ -122,6 +148,99 @@ class HealthHandler(RequestHandler):
 class IndexRedirectHandler(RequestHandler):
     def get(self):
         self.redirect("/ephys_portal_app")
+
+
+class DebugMemoryHandler(RequestHandler):
+    """Live introspection for diagnosing memory retention on a bloated task.
+
+    Returns top object counts (via gc.get_objects), top allocation sites
+    (tracemalloc snapshot diff vs. boot baseline), and fsspec/s3fs instance
+    cache sizes. Gated by DEBUG_MEMORY_TOKEN env var to avoid exposing
+    process internals publicly.
+    """
+
+    def get(self):
+        token = os.environ.get("DEBUG_MEMORY_TOKEN")
+        if token and self.request.headers.get("X-Debug-Token") != token:
+            self.set_status(401)
+            self.write("Unauthorized: missing or wrong X-Debug-Token header")
+            return
+
+        task_id = get_ecs_task_id()
+        total_memory = get_container_total_memory()
+        used_memory = get_container_used_memory()
+        mem_percent = used_memory / total_memory * 100
+        gui_sessions = list_gui_sessions()
+
+        # Force a collection so we don't count obviously-dead objects.
+        gc.collect()
+        gc.collect()
+
+        # 1) Object counts by type (top 30 by count)
+        type_counts = Counter()
+        for obj in gc.get_objects():
+            type_counts[type(obj).__name__] += 1
+        top_types = type_counts.most_common(30)
+
+        # 2) numpy/zarr/pandas big buffers — sum bytes by type
+        big_buffers = []
+        try:
+            import numpy as _np
+
+            np_bytes = 0
+            np_count = 0
+            for obj in gc.get_objects():
+                if isinstance(obj, _np.ndarray):
+                    np_bytes += obj.nbytes
+                    np_count += 1
+            big_buffers.append(("numpy.ndarray", np_count, np_bytes))
+        except Exception as e:
+            big_buffers.append(("numpy.ndarray", -1, -1))
+
+        # 3) fsspec/s3fs cache state
+        fsspec_info = []
+        try:
+            from fsspec import AbstractFileSystem
+
+            fsspec_info.append(
+                f"fsspec AbstractFileSystem._cache size: {len(AbstractFileSystem._cache)}"
+            )
+            for key, fs in list(AbstractFileSystem._cache.items())[:10]:
+                fsspec_info.append(f"  - {type(fs).__name__}: protocol={getattr(fs, 'protocol', '?')}")
+        except Exception as e:
+            fsspec_info.append(f"fsspec inspection failed: {e}")
+
+        # 4) tracemalloc top allocators since boot baseline
+        tm_lines = []
+        try:
+            current = tracemalloc.take_snapshot()
+            stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
+            for stat in stats:
+                tm_lines.append(
+                    f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
+                )
+        except Exception as e:
+            tm_lines.append(f"tracemalloc unavailable: {e}")
+
+        self.set_header("Content-Type", "text/plain; charset=utf-8")
+        out = [
+            f"=== Task {task_id} ===",
+            f"Memory: {mem_percent:.1f}%  ({used_memory/1024**3:.2f} / {total_memory/1024**3:.2f} GB)",
+            f"GUI sessions: {len(gui_sessions)}",
+            "",
+            "--- Top object types by count ---",
+        ]
+        for name, count in top_types:
+            out.append(f"  {count:>10d}  {name}")
+        out.extend(["", "--- Buffer bytes ---"])
+        for name, count, nbytes in big_buffers:
+            mib = nbytes / 1024 / 1024 if nbytes >= 0 else -1
+            out.append(f"  {name}: {count} objects, {mib:.1f} MiB")
+        out.extend(["", "--- fsspec ---"])
+        out.extend(fsspec_info)
+        out.extend(["", "--- tracemalloc (top 25 since boot) ---"])
+        out.extend(tm_lines)
+        self.write("\n".join(out))
 
 
 # 3. App file paths — Panel will exec these per-session with a proper context
@@ -182,7 +301,11 @@ if __name__ == "__main__":
         port=port,
         allow_websocket_origin=allow_ws,
         static_dirs={"images": os.path.join(APP_DIR, "images")},
-        extra_patterns=[(r"/health", HealthHandler), (r"/", IndexRedirectHandler)],
+        extra_patterns=[
+            (r"/health", HealthHandler),
+            (r"/debug/memory", DebugMemoryHandler),
+            (r"/", IndexRedirectHandler),
+        ],
         check_unused_sessions=2000,
         unused_session_lifetime=5000,
         show=False,
