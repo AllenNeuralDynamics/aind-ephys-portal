@@ -265,12 +265,12 @@ def refresh_process_table():
 pn.state.add_periodic_callback(refresh_process_table, period=2000)
 
 
-# --- Accordion: Session Logs + Tasks ---
-accordion = pn.Accordion(
+# --- Tabs: Session Logs + Tasks ---
+monitor_tabs = pn.Tabs(
     ("Session Logs", log_container),
     ("Tasks", task_tabulator),
-    active=[0],
     sizing_mode="stretch_both",
+    dynamic=True,
 )
 
 
@@ -282,7 +282,7 @@ app = pn.Column(
     pn.Row(cpu_usage_label, cpu_monitor),
     pn.pane.Markdown("## Active Sessions"),
     sessions_summary,
-    accordion,
+    monitor_tabs,
     sizing_mode="stretch_both",
 )
 
