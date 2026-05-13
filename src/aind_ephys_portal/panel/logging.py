@@ -161,7 +161,6 @@ def get_safe_max_ram_pct():
 
 
 def get_per_session_estimate_pct():
-<<<<<<< HEAD
     """Fallback peak RAM cost of one session as a percent of container memory.
 
     Used by ``can_admit_new_session()`` when the caller cannot supply a more
@@ -170,14 +169,6 @@ def get_per_session_estimate_pct():
     analyzer's unit count — see :func:`estimate_session_ram_bytes`.
     """
     return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "35"))
-=======
-    """Rough peak RAM cost of one session as a percent of container memory.
-
-    Used to predict post-admit RAM before deciding whether to admit. Should
-    be on the pessimistic side — better to under-admit than OOM.
-    """
-    return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "25"))
->>>>>>> a80dad1ea23b1fd51ee7c22bbff1372273494274
 
 
 def get_hard_cap_sessions():
@@ -193,7 +184,6 @@ def get_hard_cap_sessions():
     return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
 
 
-<<<<<<< HEAD
 def estimate_session_ram_bytes(analyzer, fast_mode=False):
     """Estimate peak RAM cost of one GUI session for the given analyzer.
 
@@ -229,15 +219,6 @@ def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
     value derived from :func:`estimate_session_ram_bytes` when possible —
     a 100-unit session needs much less headroom than a 500-unit one, and
     a fixed 35% over- or under-budgets both.
-=======
-def can_admit_new_session(current_count=None, used_pct=None):
-    """Return True iff this task should accept one more session right now.
-
-    Predicts post-admit RAM as ``current_used + per_session_estimate`` and
-    rejects if it'd exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
-    already reached. Caller may pass ``current_count`` and ``used_pct`` to
-    avoid a second filesystem/cgroup read per request.
->>>>>>> a80dad1ea23b1fd51ee7c22bbff1372273494274
     """
     if current_count is None:
         current_count = len(list_gui_sessions())
@@ -245,13 +226,9 @@ def can_admit_new_session(current_count=None, used_pct=None):
         return False
     if used_pct is None:
         used_pct = get_container_used_memory() / get_container_total_memory() * 100
-<<<<<<< HEAD
     if estimate_pct is None:
         estimate_pct = get_per_session_estimate_pct()
     projected = used_pct + estimate_pct
-=======
-    projected = used_pct + get_per_session_estimate_pct()
->>>>>>> a80dad1ea23b1fd51ee7c22bbff1372273494274
     return projected < get_safe_max_ram_pct()
 
 
