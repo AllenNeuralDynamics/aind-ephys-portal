@@ -1,5 +1,6 @@
 import ctypes
 import json
+import os
 import psutil
 import param
 import time
@@ -77,6 +78,12 @@ aind_layout = dict(
     zone7=["waveform"],
     zone8=["correlogram", "metrics", "mainsettings"],
 )
+
+
+# Default OFF until we verify the refcount guard doesn't race with concurrent
+# sessions that may grab a cached fsspec FS microseconds after we check. Flip
+# via FSSPEC_DROP_INSTANCE_CACHE=1 once we have confidence.
+_FSSPEC_DROP_INSTANCE_CACHE = os.environ.get("FSSPEC_DROP_INSTANCE_CACHE", "0").lower() in ("1", "true", "yes")
 
 
 def _malloc_trim():
@@ -599,8 +606,9 @@ class EphysGuiView(param.Parameterized):
             def _deferred_gc():
                 gc.collect()
                 gc.collect()
-                _clear_fsspec_instance_caches()
-                gc.collect()
+                if _FSSPEC_DROP_INSTANCE_CACHE:
+                    _clear_fsspec_instance_caches()
+                    gc.collect()
                 _malloc_trim()
                 final_mem = psutil.virtual_memory()
                 used = final_mem.used / (1024**3)
@@ -612,8 +620,9 @@ class EphysGuiView(param.Parameterized):
             # Fallback: run immediately if IOLoop is unavailable
             gc.collect()
             gc.collect()
-            _clear_fsspec_instance_caches()
-            gc.collect()
+            if _FSSPEC_DROP_INSTANCE_CACHE:
+                _clear_fsspec_instance_caches()
+                gc.collect()
             _malloc_trim()
             final_mem = psutil.virtual_memory()
             used = final_mem.used / (1024**3)
