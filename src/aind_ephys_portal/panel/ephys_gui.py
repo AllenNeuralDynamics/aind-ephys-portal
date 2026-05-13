@@ -199,7 +199,14 @@ class EphysGuiView(param.Parameterized):
             sizing_mode="stretch_width",
         )
 
-        num_gui_sessions = len(list_gui_sessions())
+        # `on_session_created` in setup.py runs *before* this constructor and has
+        # already added this session's log file to the count. So `list_gui_sessions()`
+        # returns ALL sessions including the one being admitted right now. Subtract 1
+        # to get the count of OTHER (already-active) sessions, which is what
+        # `can_admit_new_session()` expects ("how many sessions are already
+        # consuming a slot — can we fit one more on top of them?").
+        all_gui_sessions = len(list_gui_sessions())
+        existing_gui_sessions = max(0, all_gui_sessions - 1)
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
         total_ram_bytes = get_container_total_memory()
 
@@ -235,12 +242,10 @@ class EphysGuiView(param.Parameterized):
                 self._preloaded_analyzer = None
                 print(f"Could not pre-load analyzer for size estimate: {e}. Using static fallback.")
 
-        # NB: this is the entry point for THIS session, so it isn't counted in
-        # num_gui_sessions yet — can_admit_new_session predicts what RAM would
-        # look like AFTER this admit and rejects if it'd cross the safe ceiling
-        # or the hard cap.
+        # Pass the count of OTHER existing sessions (not this one) so
+        # can_admit_new_session can answer "is there room for one more?".
         if not can_admit_new_session(
-            current_count=num_gui_sessions,
+            current_count=existing_gui_sessions,
             used_pct=ram_percent,
             estimate_pct=estimate_pct,
         ):
@@ -255,8 +260,8 @@ class EphysGuiView(param.Parameterized):
             hard_cap = get_hard_cap_sessions()
             safe_max = get_safe_max_ram_pct()
             effective_estimate = estimate_pct if estimate_pct is not None else get_per_session_estimate_pct()
-            if num_gui_sessions >= hard_cap:
-                reason = f"hard session cap reached ({num_gui_sessions}/{hard_cap})"
+            if existing_gui_sessions >= hard_cap:
+                reason = f"hard session cap reached ({existing_gui_sessions}/{hard_cap})"
             else:
                 source = f"{estimate_units} units" if estimate_units is not None else "static fallback"
                 reason = (
