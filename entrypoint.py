@@ -208,10 +208,14 @@ def _build_debug_memory_payload():
     except Exception as e:
         fsspec_info.append(f"fsspec inspection failed: {e}")
 
-    # tracemalloc top allocators since boot baseline
+    # tracemalloc top allocators since the recorded baseline. Use is_tracing()
+    # so runtime POST /debug/tracemalloc/{start,stop} toggles are reflected
+    # automatically — no need to read a separate module-level flag.
     tm_lines = []
-    if not _TRACEMALLOC_ENABLED:
-        tm_lines.append("tracemalloc disabled (set TRACEMALLOC_ENABLED=1 to enable)")
+    if not tracemalloc.is_tracing():
+        tm_lines.append("tracemalloc disabled (POST /debug/tracemalloc/start to enable)")
+    elif _tracemalloc_baseline is None:
+        tm_lines.append("tracemalloc tracing, but no baseline snapshot yet")
     else:
         try:
             current = tracemalloc.take_snapshot()
@@ -293,6 +297,78 @@ class DebugMemoryHandler(RequestHandler):
         self.write(body)
 
 
+def _check_debug_token(handler):
+    """Returns True if request is authorized, otherwise writes 401 and returns False."""
+    token = os.environ.get("DEBUG_MEMORY_TOKEN")
+    if token and handler.request.headers.get("X-Debug-Token") != token:
+        handler.set_status(401)
+        handler.write("Unauthorized: missing or wrong X-Debug-Token header")
+        return False
+    return True
+
+
+class TracemallocStartHandler(RequestHandler):
+    """POST /debug/tracemalloc/start?depth=4 — turn tracemalloc on at runtime.
+
+    Captures a fresh baseline snapshot so subsequent /debug/memory shows
+    allocations made AFTER this point. Only affects the task this request
+    lands on (each ECS task is its own process). Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        try:
+            depth = int(self.get_argument("depth", "4"))
+        except ValueError:
+            self.set_status(400)
+            self.write("depth must be an integer")
+            return
+        if depth < 1 or depth > 25:
+            self.set_status(400)
+            self.write("depth must be between 1 and 25")
+            return
+
+        task_id = get_ecs_task_id()
+        if tracemalloc.is_tracing():
+            # Already running — refresh the baseline so the next /debug/memory
+            # diffs against "now" instead of an old snapshot.
+            _tracemalloc_baseline = tracemalloc.take_snapshot()
+            _DEBUG_MEM_CACHE["body"] = ""  # invalidate stale cached output
+            self.write(
+                f"tracemalloc already tracing on task {task_id}. "
+                f"Baseline refreshed (depth unchanged).\n"
+            )
+            return
+
+        tracemalloc.start(depth)
+        _tracemalloc_baseline = tracemalloc.take_snapshot()
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STARTED on task {task_id} with depth {depth}\n")
+
+
+class TracemallocStopHandler(RequestHandler):
+    """POST /debug/tracemalloc/stop — turn tracemalloc off at runtime.
+
+    Frees the bookkeeping memory tracemalloc accumulates. Only affects the
+    task this request lands on. Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        task_id = get_ecs_task_id()
+        if not tracemalloc.is_tracing():
+            self.write(f"tracemalloc was already stopped on task {task_id}\n")
+            return
+        tracemalloc.stop()
+        _tracemalloc_baseline = None
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STOPPED on task {task_id}\n")
+
+
 # 3. App file paths — Panel will exec these per-session with a proper context
 APP_DIR = "src/aind_ephys_portal"
 apps = {
@@ -354,6 +430,8 @@ if __name__ == "__main__":
         extra_patterns=[
             (r"/health", HealthHandler),
             (r"/debug/memory", DebugMemoryHandler),
+            (r"/debug/tracemalloc/start", TracemallocStartHandler),
+            (r"/debug/tracemalloc/stop", TracemallocStopHandler),
             (r"/", IndexRedirectHandler),
         ],
         check_unused_sessions=2000,
