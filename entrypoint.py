@@ -11,11 +11,20 @@ import psutil
 import panel as pn
 from tornado.web import RequestHandler
 
-# Start tracemalloc as early as possible so allocation tracebacks include the
-# session-loading code paths. Frame depth 10 is enough to identify the call site
-# inside spikeinterface/zarr/fsspec without blowing up memory overhead.
-tracemalloc.start(10)
-_tracemalloc_baseline = tracemalloc.take_snapshot()
+# tracemalloc is OFF by default. Recording a per-allocation Python traceback
+# adds non-trivial CPU overhead per allocation; on a Panel + spikeinterface
+# + zarr workload that slowed Tornado enough for ECS health checks to time
+# out, producing exit-137 restart loops. Enable only on diagnostic deploys:
+#   TRACEMALLOC_ENABLED=1  (and optionally TRACEMALLOC_DEPTH, default 4)
+_TRACEMALLOC_ENABLED = os.environ.get("TRACEMALLOC_ENABLED", "0").lower() in ("1", "true", "yes")
+_tracemalloc_baseline = None
+if _TRACEMALLOC_ENABLED:
+    _tm_depth = int(os.environ.get("TRACEMALLOC_DEPTH", "4"))
+    tracemalloc.start(_tm_depth)
+    _tracemalloc_baseline = tracemalloc.take_snapshot()
+    print(f"tracemalloc ENABLED with frame depth {_tm_depth}")
+else:
+    print("tracemalloc DISABLED (set TRACEMALLOC_ENABLED=1 to enable)")
 
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
@@ -33,11 +42,11 @@ TARGET_CLEAR_TMP_ARR_SECONDS = 180
 TARGET_INFLATE_DELAY_SECONDS = 90
 
 # Recycle signal: when a task is sitting idle (0 GUI sessions) but its RAM
-# stays above this percent, /health returns 503 so the ALB deregisters it and
-# the ECS service scheduler replaces it. Baseline (no sessions, fresh start)
-# is ~10%, so 40% means tolerating ~30 points of accumulated residue before
-# recycling. Only triggers with 0 sessions, so user sessions are never cut.
-RECYCLE_RAM_PERCENT_WHEN_IDLE = 40
+# stays above this percent, /health returns 503 so the ALB deregisters it
+# and the ECS service scheduler replaces it. Overridable via env var so we
+# can tune without redeploys once we re-baseline post-rollback. Only
+# triggers with 0 sessions, so user sessions are never cut.
+RECYCLE_RAM_PERCENT_WHEN_IDLE = int(os.environ.get("RECYCLE_RAM_PERCENT_WHEN_IDLE", "50"))
 
 
 if LOG_DIR.is_dir():
@@ -212,15 +221,18 @@ class DebugMemoryHandler(RequestHandler):
 
         # 4) tracemalloc top allocators since boot baseline
         tm_lines = []
-        try:
-            current = tracemalloc.take_snapshot()
-            stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
-            for stat in stats:
-                tm_lines.append(
-                    f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
-                )
-        except Exception as e:
-            tm_lines.append(f"tracemalloc unavailable: {e}")
+        if not _TRACEMALLOC_ENABLED:
+            tm_lines.append("tracemalloc disabled (set TRACEMALLOC_ENABLED=1 to enable)")
+        else:
+            try:
+                current = tracemalloc.take_snapshot()
+                stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
+                for stat in stats:
+                    tm_lines.append(
+                        f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
+                    )
+            except Exception as e:
+                tm_lines.append(f"tracemalloc error: {e}")
 
         self.set_header("Content-Type", "text/plain; charset=utf-8")
         out = [
