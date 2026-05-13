@@ -5,11 +5,27 @@ import psutil
 import param
 import time
 import gc
+import warnings
 from copy import deepcopy
 
 import panel as pn
 
 pn.extension("tabulator", "gridstack")
+
+# Silence sklearn's InconsistentVersionWarning during analyzer load. The
+# warning itself is informational, but some upstream code in the
+# spikeinterface / spikeinterface-gui stack constructs the warning class
+# with a positional arg, which crashes because its __init__ is kwarg-only
+# (`__init__() takes 1 positional argument but 2 were given`). Suppressing
+# the warning prevents any reactive code path that re-emits it from firing.
+# Belt-and-braces with the scikit-learn==1.8.0 pin in the Dockerfile, which
+# avoids the version mismatch in the common case but doesn't help when
+# loading older analyzers saved with sklearn < 1.8.0.
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
 
 
 from spikeinterface_gui import run_mainwindow
@@ -21,7 +37,10 @@ from spikeinterface.curation import validate_curation_dict
 from aind_ephys_portal.panel.logging import (
     setup_logging,
     local_log_context,
-    get_max_number_of_gui_sessions,
+    can_admit_new_session,
+    get_hard_cap_sessions,
+    get_per_session_estimate_pct,
+    get_safe_max_ram_pct,
     list_gui_sessions,
     get_ecs_task_id,
     get_container_total_memory,
@@ -30,12 +49,10 @@ from aind_ephys_portal.panel.logging import (
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
 
-# Refuse to admit a new session if the task's RAM is already above this percent,
-# regardless of how many sessions are active. Protects "poisoned" tasks
-# (residue from prior sessions) from being pushed into OOM by the count-based
-# admission rule. Picked below the /health 503 recycle threshold so the ALB
-# pulls the task out of rotation before the GUI starts rejecting.
-MAX_RAM_PERCENT_FOR_NEW_SESSION = 55
+# Admission is now decided dynamically by can_admit_new_session() in logging.py,
+# which predicts post-admit RAM and rejects above SAFE_MAX_RAM_PCT or beyond
+# HARD_CAP_SESSIONS. The old fixed MAX_RAM_PERCENT_FOR_NEW_SESSION constant has
+# been removed — it is subsumed by SAFE_MAX_RAM_PCT - PER_SESSION_ESTIMATE_PCT.
 
 displayed_unit_properties = [
     "decoder_label",
@@ -182,22 +199,29 @@ class EphysGuiView(param.Parameterized):
         )
 
         num_gui_sessions = len(list_gui_sessions())
-        max_sessions = get_max_number_of_gui_sessions()
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
-        too_many_sessions = num_gui_sessions > max_sessions
-        too_much_ram = ram_percent > MAX_RAM_PERCENT_FOR_NEW_SESSION
-        if too_many_sessions or too_much_ram:
+        # NB: this is the entry point for THIS session, so it isn't counted in
+        # num_gui_sessions yet — can_admit_new_session predicts what RAM would
+        # look like AFTER this admit and rejects if it'd cross the safe ceiling
+        # or the hard cap.
+        if not can_admit_new_session(current_count=num_gui_sessions, used_pct=ram_percent):
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
             session_id = getattr(doc, "_log_session_id", None)
             if route and session_id:
                 remove_session(route, session_id)
-            reason = (
-                f"too many sessions ({num_gui_sessions}/{max_sessions})"
-                if too_many_sessions
-                else f"task RAM already at {ram_percent:.1f}% (limit {MAX_RAM_PERCENT_FOR_NEW_SESSION}%)"
-            )
+            hard_cap = get_hard_cap_sessions()
+            est_pct = get_per_session_estimate_pct()
+            safe_max = get_safe_max_ram_pct()
+            if num_gui_sessions >= hard_cap:
+                reason = f"hard session cap reached ({num_gui_sessions}/{hard_cap})"
+            else:
+                reason = (
+                    f"insufficient RAM headroom: current {ram_percent:.1f}% + "
+                    f"~{est_pct:.0f}% (est. per session) would exceed safe ceiling "
+                    f"{safe_max:.0f}%"
+                )
             print(f"Rejecting new session: {reason}. Task ID: {task_id}")
             self.layout = pn.Column(
                 header,
@@ -466,12 +490,63 @@ class EphysGuiView(param.Parameterized):
         if sigui_win is not None:
             controller = getattr(sigui_win, "controller", None)
             if controller is not None:
-                # Clear views list — each view has param watchers holding back-refs
+                # Break the SignalHandler ↔ Controller back-edge BEFORE we
+                # touch the views, so even partial failures still detach the
+                # graph from the controller.
+                signal_handler = getattr(controller, "signal_handler", None)
+                if signal_handler is not None:
+                    try:
+                        signal_handler.controller = None
+                    except Exception:
+                        pass
+
+                # Each view has TWO sets of param watchers, plus three back-refs
+                # to the controller graph that the gc cycle collector can't break
+                # because SignalHandler.controller is a strong external ref into
+                # the cycle. Break them all here:
+                #   - view.settings._parameterized watchers   (settings change → refresh)
+                #   - view.notifier watchers                  (signal handler → 8 bound methods)
+                #   - view.notifier.view = view               (direct cycle)
+                #   - view.controller = controller            (back-ref)
+                #   - view.tour_timer (ndscatterview only)    (pn.state.add_periodic_callback)
                 for view in list(getattr(controller, "views", [])):
                     try:
                         view.settings._parameterized.param.unwatch_all()
                     except Exception:
                         pass
+                    try:
+                        view.notifier.param.unwatch_all()
+                    except Exception:
+                        pass
+                    notifier = getattr(view, "notifier", None)
+                    if notifier is not None:
+                        try:
+                            notifier.view = None
+                        except Exception:
+                            pass
+                    try:
+                        view.notifier = None
+                    except Exception:
+                        pass
+                    try:
+                        view.controller = None
+                    except Exception:
+                        pass
+                    # Stop per-view periodic callbacks. Only ndscatterview's
+                    # "Random tour" registers one today, but list-driven so
+                    # adding new ones upstream doesn't silently leak.
+                    for cb_attr in ("tour_timer",):
+                        cb = getattr(view, cb_attr, None)
+                        if cb is not None:
+                            try:
+                                cb.stop()
+                            except Exception:
+                                pass
+                            try:
+                                setattr(view, cb_attr, None)
+                            except Exception:
+                                pass
+
                 controller.views = []
                 # Clear PanelMainWindow's view dicts too
                 sigui_win.views = {}
