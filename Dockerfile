@@ -29,6 +29,13 @@ RUN pip install spikeinterface==0.104.1
 # Install spikeinterface-gui from source
 RUN pip install spikeinterface-gui==0.13.1
 
+# Pin scikit-learn AFTER spikeinterface installs so we override whatever the
+# transitive resolver picked. Match the version that analyzers in our pipeline
+# are saved with — version mismatches trigger sklearn's InconsistentVersionWarning,
+# which is then constructed with a positional arg by buggy upstream code and
+# crashes session init (TypeError: __init__() takes 1 positional argument but 2).
+RUN pip install scikit-learn==1.8.0
+
 ENV PYTHONUNBUFFERED=1
 # Limit glibc malloc arenas to reduce per-thread heap fragmentation.
 # Default is 8 * NCPU; with numpy/zarr large alloc + free patterns this

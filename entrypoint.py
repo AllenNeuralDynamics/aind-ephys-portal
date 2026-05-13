@@ -1,7 +1,9 @@
+import asyncio
 import gc
 import os
 import shutil
 import threading
+import time as _time
 import tracemalloc
 from argparse import ArgumentParser
 from collections import Counter
@@ -159,100 +161,212 @@ class IndexRedirectHandler(RequestHandler):
         self.redirect("/ephys_portal_app")
 
 
+# /debug/memory does heavy work (gc.collect + walking gc.get_objects, which
+# can iterate millions of objects). Doing that on the Tornado event loop
+# thread blocks /health for long enough to trip ECS health checks → task
+# gets replaced. So we (1) run the heavy work in an executor thread,
+# (2) allow only one in-flight build via a lock, and (3) cache the result
+# for a short TTL so polling clients don't repeatedly trigger the work.
+_DEBUG_MEM_LOCK = asyncio.Lock()
+_DEBUG_MEM_CACHE = {"ts": 0.0, "body": ""}
+_DEBUG_MEM_CACHE_TTL = 30.0  # seconds
+
+
+def _build_debug_memory_payload():
+    """Heavy synchronous work — must be called from an executor thread."""
+    task_id = get_ecs_task_id()
+    total_memory = get_container_total_memory()
+    used_memory = get_container_used_memory()
+    mem_percent = used_memory / total_memory * 100
+    gui_sessions = list_gui_sessions()
+
+    # One gc.collect() is enough — two was overkill and adds latency.
+    gc.collect()
+
+    # Single pass over gc.get_objects(): count types AND sum numpy bytes
+    # in one walk. Halves the time vs the previous two-pass version.
+    type_counts = Counter()
+    np_bytes = 0
+    np_count = 0
+    for obj in gc.get_objects():
+        type_counts[type(obj).__name__] += 1
+        if isinstance(obj, np.ndarray):
+            np_bytes += obj.nbytes
+            np_count += 1
+    top_types = type_counts.most_common(30)
+
+    # fsspec/s3fs cache state
+    fsspec_info = []
+    try:
+        from fsspec import AbstractFileSystem
+
+        fsspec_info.append(
+            f"fsspec AbstractFileSystem._cache size: {len(AbstractFileSystem._cache)}"
+        )
+        for key, fs in list(AbstractFileSystem._cache.items())[:10]:
+            fsspec_info.append(f"  - {type(fs).__name__}: protocol={getattr(fs, 'protocol', '?')}")
+    except Exception as e:
+        fsspec_info.append(f"fsspec inspection failed: {e}")
+
+    # tracemalloc top allocators since the recorded baseline. Use is_tracing()
+    # so runtime POST /debug/tracemalloc/{start,stop} toggles are reflected
+    # automatically — no need to read a separate module-level flag.
+    tm_lines = []
+    if not tracemalloc.is_tracing():
+        tm_lines.append("tracemalloc disabled (POST /debug/tracemalloc/start to enable)")
+    elif _tracemalloc_baseline is None:
+        tm_lines.append("tracemalloc tracing, but no baseline snapshot yet")
+    else:
+        try:
+            current = tracemalloc.take_snapshot()
+            stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
+            for stat in stats:
+                tm_lines.append(
+                    f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
+                )
+        except Exception as e:
+            tm_lines.append(f"tracemalloc error: {e}")
+
+    out = [
+        f"=== Task {task_id} ===",
+        f"Memory: {mem_percent:.1f}%  ({used_memory/1024**3:.2f} / {total_memory/1024**3:.2f} GB)",
+        f"GUI sessions: {len(gui_sessions)}",
+        "",
+        "--- Top object types by count ---",
+    ]
+    for name, count in top_types:
+        out.append(f"  {count:>10d}  {name}")
+    out.extend(["", "--- Buffer bytes ---"])
+    mib = np_bytes / 1024 / 1024
+    out.append(f"  numpy.ndarray: {np_count} objects, {mib:.1f} MiB")
+    out.extend(["", "--- fsspec ---"])
+    out.extend(fsspec_info)
+    out.extend(["", "--- tracemalloc (top 25 since boot) ---"])
+    out.extend(tm_lines)
+    return "\n".join(out)
+
+
 class DebugMemoryHandler(RequestHandler):
     """Live introspection for diagnosing memory retention on a bloated task.
 
     Returns top object counts (via gc.get_objects), top allocation sites
     (tracemalloc snapshot diff vs. boot baseline), and fsspec/s3fs instance
-    cache sizes. Gated by DEBUG_MEMORY_TOKEN env var to avoid exposing
-    process internals publicly.
+    cache sizes. Gated by DEBUG_MEMORY_TOKEN env var. Heavy work runs in a
+    thread executor with a 1-in-flight lock and a 30s result cache so the
+    Tornado event loop stays free to answer /health.
     """
 
-    def get(self):
+    async def get(self):
         token = os.environ.get("DEBUG_MEMORY_TOKEN")
         if token and self.request.headers.get("X-Debug-Token") != token:
             self.set_status(401)
             self.write("Unauthorized: missing or wrong X-Debug-Token header")
             return
 
-        task_id = get_ecs_task_id()
-        total_memory = get_container_total_memory()
-        used_memory = get_container_used_memory()
-        mem_percent = used_memory / total_memory * 100
-        gui_sessions = list_gui_sessions()
+        # Serve cached result if fresh.
+        now = _time.monotonic()
+        if _DEBUG_MEM_CACHE["body"] and now - _DEBUG_MEM_CACHE["ts"] < _DEBUG_MEM_CACHE_TTL:
+            self.set_header("Content-Type", "text/plain; charset=utf-8")
+            self.set_header("X-Debug-Cache", "hit")
+            age = now - _DEBUG_MEM_CACHE["ts"]
+            self.write(f"[cached snapshot, age {age:.1f}s — TTL {_DEBUG_MEM_CACHE_TTL:.0f}s]\n\n")
+            self.write(_DEBUG_MEM_CACHE["body"])
+            return
 
-        # Force a collection so we don't count obviously-dead objects.
-        gc.collect()
-        gc.collect()
+        # Reject pile-ups while a build is in flight. Caller can retry.
+        if _DEBUG_MEM_LOCK.locked():
+            self.set_status(429)
+            self.set_header("Retry-After", "5")
+            self.write("Another /debug/memory build is in flight; retry in a few seconds.")
+            return
 
-        # 1) Object counts by type (top 30 by count)
-        type_counts = Counter()
-        for obj in gc.get_objects():
-            type_counts[type(obj).__name__] += 1
-        top_types = type_counts.most_common(30)
-
-        # 2) numpy/zarr/pandas big buffers — sum bytes by type
-        big_buffers = []
-        try:
-            import numpy as _np
-
-            np_bytes = 0
-            np_count = 0
-            for obj in gc.get_objects():
-                if isinstance(obj, _np.ndarray):
-                    np_bytes += obj.nbytes
-                    np_count += 1
-            big_buffers.append(("numpy.ndarray", np_count, np_bytes))
-        except Exception as e:
-            big_buffers.append(("numpy.ndarray", -1, -1))
-
-        # 3) fsspec/s3fs cache state
-        fsspec_info = []
-        try:
-            from fsspec import AbstractFileSystem
-
-            fsspec_info.append(
-                f"fsspec AbstractFileSystem._cache size: {len(AbstractFileSystem._cache)}"
-            )
-            for key, fs in list(AbstractFileSystem._cache.items())[:10]:
-                fsspec_info.append(f"  - {type(fs).__name__}: protocol={getattr(fs, 'protocol', '?')}")
-        except Exception as e:
-            fsspec_info.append(f"fsspec inspection failed: {e}")
-
-        # 4) tracemalloc top allocators since boot baseline
-        tm_lines = []
-        if not _TRACEMALLOC_ENABLED:
-            tm_lines.append("tracemalloc disabled (set TRACEMALLOC_ENABLED=1 to enable)")
-        else:
-            try:
-                current = tracemalloc.take_snapshot()
-                stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
-                for stat in stats:
-                    tm_lines.append(
-                        f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
-                    )
-            except Exception as e:
-                tm_lines.append(f"tracemalloc error: {e}")
+        async with _DEBUG_MEM_LOCK:
+            # Re-check the cache: another request may have populated it
+            # while we were waiting on the lock.
+            now = _time.monotonic()
+            if _DEBUG_MEM_CACHE["body"] and now - _DEBUG_MEM_CACHE["ts"] < _DEBUG_MEM_CACHE_TTL:
+                body = _DEBUG_MEM_CACHE["body"]
+            else:
+                loop = asyncio.get_event_loop()
+                body = await loop.run_in_executor(None, _build_debug_memory_payload)
+                _DEBUG_MEM_CACHE["ts"] = _time.monotonic()
+                _DEBUG_MEM_CACHE["body"] = body
 
         self.set_header("Content-Type", "text/plain; charset=utf-8")
-        out = [
-            f"=== Task {task_id} ===",
-            f"Memory: {mem_percent:.1f}%  ({used_memory/1024**3:.2f} / {total_memory/1024**3:.2f} GB)",
-            f"GUI sessions: {len(gui_sessions)}",
-            "",
-            "--- Top object types by count ---",
-        ]
-        for name, count in top_types:
-            out.append(f"  {count:>10d}  {name}")
-        out.extend(["", "--- Buffer bytes ---"])
-        for name, count, nbytes in big_buffers:
-            mib = nbytes / 1024 / 1024 if nbytes >= 0 else -1
-            out.append(f"  {name}: {count} objects, {mib:.1f} MiB")
-        out.extend(["", "--- fsspec ---"])
-        out.extend(fsspec_info)
-        out.extend(["", "--- tracemalloc (top 25 since boot) ---"])
-        out.extend(tm_lines)
-        self.write("\n".join(out))
+        self.set_header("X-Debug-Cache", "miss")
+        self.write(body)
+
+
+def _check_debug_token(handler):
+    """Returns True if request is authorized, otherwise writes 401 and returns False."""
+    token = os.environ.get("DEBUG_MEMORY_TOKEN")
+    if token and handler.request.headers.get("X-Debug-Token") != token:
+        handler.set_status(401)
+        handler.write("Unauthorized: missing or wrong X-Debug-Token header")
+        return False
+    return True
+
+
+class TracemallocStartHandler(RequestHandler):
+    """POST /debug/tracemalloc/start?depth=4 — turn tracemalloc on at runtime.
+
+    Captures a fresh baseline snapshot so subsequent /debug/memory shows
+    allocations made AFTER this point. Only affects the task this request
+    lands on (each ECS task is its own process). Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        try:
+            depth = int(self.get_argument("depth", "4"))
+        except ValueError:
+            self.set_status(400)
+            self.write("depth must be an integer")
+            return
+        if depth < 1 or depth > 25:
+            self.set_status(400)
+            self.write("depth must be between 1 and 25")
+            return
+
+        task_id = get_ecs_task_id()
+        if tracemalloc.is_tracing():
+            # Already running — refresh the baseline so the next /debug/memory
+            # diffs against "now" instead of an old snapshot.
+            _tracemalloc_baseline = tracemalloc.take_snapshot()
+            _DEBUG_MEM_CACHE["body"] = ""  # invalidate stale cached output
+            self.write(
+                f"tracemalloc already tracing on task {task_id}. "
+                f"Baseline refreshed (depth unchanged).\n"
+            )
+            return
+
+        tracemalloc.start(depth)
+        _tracemalloc_baseline = tracemalloc.take_snapshot()
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STARTED on task {task_id} with depth {depth}\n")
+
+
+class TracemallocStopHandler(RequestHandler):
+    """POST /debug/tracemalloc/stop — turn tracemalloc off at runtime.
+
+    Frees the bookkeeping memory tracemalloc accumulates. Only affects the
+    task this request lands on. Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        task_id = get_ecs_task_id()
+        if not tracemalloc.is_tracing():
+            self.write(f"tracemalloc was already stopped on task {task_id}\n")
+            return
+        tracemalloc.stop()
+        _tracemalloc_baseline = None
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STOPPED on task {task_id}\n")
 
 
 # 3. App file paths — Panel will exec these per-session with a proper context
@@ -316,6 +430,8 @@ if __name__ == "__main__":
         extra_patterns=[
             (r"/health", HealthHandler),
             (r"/debug/memory", DebugMemoryHandler),
+            (r"/debug/tracemalloc/start", TracemallocStartHandler),
+            (r"/debug/tracemalloc/stop", TracemallocStopHandler),
             (r"/", IndexRedirectHandler),
         ],
         check_unused_sessions=2000,
