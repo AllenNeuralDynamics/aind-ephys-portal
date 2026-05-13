@@ -38,6 +38,7 @@ from aind_ephys_portal.panel.logging import (
     setup_logging,
     local_log_context,
     can_admit_new_session,
+    estimate_session_ram_bytes,
     get_hard_cap_sessions,
     get_per_session_estimate_pct,
     get_safe_max_ram_pct,
@@ -200,11 +201,45 @@ class EphysGuiView(param.Parameterized):
 
         num_gui_sessions = len(list_gui_sessions())
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
+        total_ram_bytes = get_container_total_memory()
+
+        # Try to derive a *dataset-specific* RAM estimate by pre-loading the
+        # analyzer with no extensions and reading its unit count. This costs
+        # one S3 round-trip (~1-3s) but lets us accurately predict heavy
+        # sessions instead of relying on a fixed percent. The pre-loaded
+        # analyzer is stashed on self.analyzer so _initialize_analyzer()
+        # below can skip its own si.load() call.
+        estimate_pct = None
+        estimate_units = None
+        if self.analyzer_path and self.analyzer_path.endswith((".zarr", ".zarr/")):
+            try:
+                self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+                estimate_units = len(self.analyzer.unit_ids)
+                est_bytes = estimate_session_ram_bytes(self.analyzer, fast_mode=self.fast_mode)
+                estimate_pct = est_bytes / total_ram_bytes * 100
+                print(
+                    f"Dynamic per-session RAM estimate: "
+                    f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
+                    f"for {estimate_units} units, fast_mode={self.fast_mode}"
+                )
+            except Exception as e:
+                # Pre-load failed (S3 transient, bad path, etc.) — fall back
+                # to the static estimate. Better to occasionally reject a
+                # session we could have admitted than to OOM.
+                self.analyzer = None
+                print(f"Could not pre-load analyzer for size estimate: {e}. Using static fallback.")
+
         # NB: this is the entry point for THIS session, so it isn't counted in
         # num_gui_sessions yet — can_admit_new_session predicts what RAM would
         # look like AFTER this admit and rejects if it'd cross the safe ceiling
         # or the hard cap.
-        if not can_admit_new_session(current_count=num_gui_sessions, used_pct=ram_percent):
+        if not can_admit_new_session(
+            current_count=num_gui_sessions,
+            used_pct=ram_percent,
+            estimate_pct=estimate_pct,
+        ):
+            # Drop the pre-loaded analyzer so its memory is released
+            self.analyzer = None
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
@@ -212,15 +247,16 @@ class EphysGuiView(param.Parameterized):
             if route and session_id:
                 remove_session(route, session_id)
             hard_cap = get_hard_cap_sessions()
-            est_pct = get_per_session_estimate_pct()
             safe_max = get_safe_max_ram_pct()
+            effective_estimate = estimate_pct if estimate_pct is not None else get_per_session_estimate_pct()
             if num_gui_sessions >= hard_cap:
                 reason = f"hard session cap reached ({num_gui_sessions}/{hard_cap})"
             else:
+                source = f"{estimate_units} units" if estimate_units is not None else "static fallback"
                 reason = (
                     f"insufficient RAM headroom: current {ram_percent:.1f}% + "
-                    f"~{est_pct:.0f}% (est. per session) would exceed safe ceiling "
-                    f"{safe_max:.0f}%"
+                    f"~{effective_estimate:.1f}% (estimated from {source}) would "
+                    f"exceed safe ceiling {safe_max:.0f}%"
                 )
             print(f"Rejecting new session: {reason}. Task ID: {task_id}")
             self.layout = pn.Column(
@@ -401,8 +437,14 @@ class EphysGuiView(param.Parameterized):
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
             raise ValueError("Only Zarr files are supported for now.")
-        print(f"Loading analyzer...")
-        self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+        # The admission step in __init__ may have already pre-loaded the
+        # analyzer (load_extensions=False) to compute a dynamic RAM
+        # estimate. Reuse it if present to avoid a second S3 round-trip.
+        if self.analyzer is None:
+            print(f"Loading analyzer...")
+            self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+        else:
+            print(f"Reusing pre-loaded analyzer (skipped re-fetching from S3).")
         print(f"Analyzer loaded: {self.analyzer}")
 
     def _set_processed_recording(self):
