@@ -33,6 +33,8 @@ from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
 from aind_ephys_portal.panel.logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
+    can_admit_new_session,
+    get_hard_cap_sessions,
     get_container_total_memory,
     get_container_used_memory,
     get_ecs_task_id,
@@ -100,40 +102,45 @@ class HealthHandler(RequestHandler):
         mem_percent = used_memory / total_memory * 100
         # count number of GUI app sessions
         gui_sessions = list_gui_sessions()
+        num_sessions = len(gui_sessions)
         task_id = get_ecs_task_id()
-        max_gui_sessions = get_max_number_of_gui_sessions()
+        hard_cap = get_hard_cap_sessions()
 
         # Idle-but-bloated → ask ALB to deregister so ECS replaces us.
         # GUI-level enforcement protects against admitting too many sessions,
         # but only the load balancer can take a leaky task out of rotation.
-        if len(gui_sessions) == 0 and mem_percent > RECYCLE_RAM_PERCENT_WHEN_IDLE:
+        if num_sessions == 0 and mem_percent > RECYCLE_RAM_PERCENT_WHEN_IDLE:
             self.set_status(503)
             self.write(
                 f"Unhealthy (recycle): Memory at {mem_percent:.1f}% with 0 sessions - Task ID: {task_id}"
             )
             return
 
-        if mem_percent > TARGET_MEMORY_TRIGGER_PERCENT:
+        # "Operationally full" = at least one session AND can't fit another
+        # without crossing the safe RAM ceiling or hitting the hard count cap.
+        # This unifies the old (count-based) and RAM-based busy paths into one
+        # predicate that's accurate for both light and heavy sessions.
+        full = num_sessions > 0 and not can_admit_new_session(
+            current_count=num_sessions, used_pct=mem_percent
+        )
+
+        if full:
             self.set_status(200)
-            self.write(
-                f"Busy (RAM Usage):\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
-            )
-        elif len(gui_sessions) >= max_gui_sessions:
-            self.set_status(200)
-            # inflate RAM once per threshold-exceeded event so ECS spawns a new task;
-            # wait TARGET_INFLATE_DELAY_SECONDS first so existing sessions finish loading
+            # inflate RAM once per "full" event so ECS spawns a new task;
+            # wait TARGET_INFLATE_DELAY_SECONDS first so loading sessions
+            # have time to finish.
             if _tmp_arr is None and _inflate_delay_timer is None and not _tmp_array_triggered:
                 _tmp_array_triggered = True
                 print(
-                    f"Max sessions reached, will inflate memory in {TARGET_INFLATE_DELAY_SECONDS}s"
+                    f"Task is full ({num_sessions} sessions, {mem_percent:.1f}% RAM); "
+                    f"will inflate memory in {TARGET_INFLATE_DELAY_SECONDS}s"
                 )
                 _inflate_delay_timer = threading.Timer(
                     TARGET_INFLATE_DELAY_SECONDS, _inflate_memory
                 )
                 _inflate_delay_timer.daemon = True
                 _inflate_delay_timer.start()
-            busy_msg = "(MAX SESSIONS REACHED)"
+            busy_msg = "(FULL)"
             if _tmp_arr is not None:
                 busy_msg += " (inflating memory)"
             elif _inflate_delay_timer is not None:
@@ -141,8 +148,8 @@ class HealthHandler(RequestHandler):
             elif _tmp_array_triggered:
                 busy_msg += " (inflated memory released)"
             self.write(
-                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
+                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
         else:
             _tmp_array_triggered = False
@@ -151,8 +158,8 @@ class HealthHandler(RequestHandler):
                 _inflate_delay_timer = None
             self.set_status(200)
             self.write(
-                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
+                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
 
 

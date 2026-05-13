@@ -21,7 +21,10 @@ from spikeinterface.curation import validate_curation_dict
 from aind_ephys_portal.panel.logging import (
     setup_logging,
     local_log_context,
-    get_max_number_of_gui_sessions,
+    can_admit_new_session,
+    get_hard_cap_sessions,
+    get_per_session_estimate_pct,
+    get_safe_max_ram_pct,
     list_gui_sessions,
     get_ecs_task_id,
     get_container_total_memory,
@@ -30,12 +33,10 @@ from aind_ephys_portal.panel.logging import (
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
 
-# Refuse to admit a new session if the task's RAM is already above this percent,
-# regardless of how many sessions are active. Protects "poisoned" tasks
-# (residue from prior sessions) from being pushed into OOM by the count-based
-# admission rule. Picked below the /health 503 recycle threshold so the ALB
-# pulls the task out of rotation before the GUI starts rejecting.
-MAX_RAM_PERCENT_FOR_NEW_SESSION = 55
+# Admission is now decided dynamically by can_admit_new_session() in logging.py,
+# which predicts post-admit RAM and rejects above SAFE_MAX_RAM_PCT or beyond
+# HARD_CAP_SESSIONS. The old fixed MAX_RAM_PERCENT_FOR_NEW_SESSION constant has
+# been removed — it is subsumed by SAFE_MAX_RAM_PCT - PER_SESSION_ESTIMATE_PCT.
 
 displayed_unit_properties = [
     "decoder_label",
@@ -182,22 +183,29 @@ class EphysGuiView(param.Parameterized):
         )
 
         num_gui_sessions = len(list_gui_sessions())
-        max_sessions = get_max_number_of_gui_sessions()
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
-        too_many_sessions = num_gui_sessions > max_sessions
-        too_much_ram = ram_percent > MAX_RAM_PERCENT_FOR_NEW_SESSION
-        if too_many_sessions or too_much_ram:
+        # NB: this is the entry point for THIS session, so it isn't counted in
+        # num_gui_sessions yet — can_admit_new_session predicts what RAM would
+        # look like AFTER this admit and rejects if it'd cross the safe ceiling
+        # or the hard cap.
+        if not can_admit_new_session(current_count=num_gui_sessions, used_pct=ram_percent):
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
             session_id = getattr(doc, "_log_session_id", None)
             if route and session_id:
                 remove_session(route, session_id)
-            reason = (
-                f"too many sessions ({num_gui_sessions}/{max_sessions})"
-                if too_many_sessions
-                else f"task RAM already at {ram_percent:.1f}% (limit {MAX_RAM_PERCENT_FOR_NEW_SESSION}%)"
-            )
+            hard_cap = get_hard_cap_sessions()
+            est_pct = get_per_session_estimate_pct()
+            safe_max = get_safe_max_ram_pct()
+            if num_gui_sessions >= hard_cap:
+                reason = f"hard session cap reached ({num_gui_sessions}/{hard_cap})"
+            else:
+                reason = (
+                    f"insufficient RAM headroom: current {ram_percent:.1f}% + "
+                    f"~{est_pct:.0f}% (est. per session) would exceed safe ceiling "
+                    f"{safe_max:.0f}%"
+                )
             print(f"Rejecting new session: {reason}. Task ID: {task_id}")
             self.layout = pn.Column(
                 header,

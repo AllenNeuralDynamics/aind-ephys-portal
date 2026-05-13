@@ -144,17 +144,70 @@ def get_container_used_memory():
     return psutil.virtual_memory().used
 
 
-def get_max_number_of_gui_sessions():
-    # Estimate number of sessions per worker for health check.
-    if "MAX_GUI_SESSIONS_PER_TASK" in os.environ:
-        print(f"Using MAX_GUI_SESSIONS_PER_TASK from environment: {os.environ['MAX_GUI_SESSIONS_PER_TASK']}")
-        MAX_SESSIONS_PER_WORKER = int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
-    else:
-        SESSION_AVG_RAM_USAGE_GB = 6
-        TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
-        MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
+# --- Dynamic session admission ---
+#
+# The old static cap (`floor(total_ram / 6 GB)`) was too coarse:
+#   - It admits a 2nd heavy session on a task already at 60% RAM (→ OOM)
+#   - It rejects a 3rd light session on a task at 30% RAM (→ wasted capacity)
+#
+# New model: admit iff (current_used + per_session_estimate) < safe_max,
+# capped by an absolute session-count ceiling as a safety net. Each knob is
+# env-tunable so we can adjust without redeploys.
 
-    return MAX_SESSIONS_PER_WORKER
+
+def get_safe_max_ram_pct():
+    """Never voluntarily push RAM above this percent of container memory."""
+    return float(os.environ.get("SAFE_MAX_RAM_PCT", "75"))
+
+
+def get_per_session_estimate_pct():
+    """Rough peak RAM cost of one session as a percent of container memory.
+
+    Used to predict post-admit RAM before deciding whether to admit. Should
+    be on the pessimistic side — better to under-admit than OOM.
+    """
+    return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "25"))
+
+
+def get_hard_cap_sessions():
+    """Absolute ceiling on concurrent sessions per task.
+
+    Independent of RAM headroom — protects against estimate errors and from
+    operational issues (many Bokeh documents + periodic callbacks on one
+    process). Also lets the legacy ``MAX_GUI_SESSIONS_PER_TASK`` env var
+    keep working as an override.
+    """
+    if "MAX_GUI_SESSIONS_PER_TASK" in os.environ:
+        return int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
+    return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
+
+
+def can_admit_new_session(current_count=None, used_pct=None):
+    """Return True iff this task should accept one more session right now.
+
+    Predicts post-admit RAM as ``current_used + per_session_estimate`` and
+    rejects if it'd exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
+    already reached. Caller may pass ``current_count`` and ``used_pct`` to
+    avoid a second filesystem/cgroup read per request.
+    """
+    if current_count is None:
+        current_count = len(list_gui_sessions())
+    if current_count >= get_hard_cap_sessions():
+        return False
+    if used_pct is None:
+        used_pct = get_container_used_memory() / get_container_total_memory() * 100
+    projected = used_pct + get_per_session_estimate_pct()
+    return projected < get_safe_max_ram_pct()
+
+
+def get_max_number_of_gui_sessions():
+    """Backward-compatible alias for :func:`get_hard_cap_sessions`.
+
+    Kept so existing imports and the ``--max-sessions`` CLI flag continue
+    to work. New code should prefer :func:`can_admit_new_session`, which
+    accounts for actual RAM headroom rather than a static count.
+    """
+    return get_hard_cap_sessions()
 
 
 class MultiSessionTee(io.TextIOBase):
