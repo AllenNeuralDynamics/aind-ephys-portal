@@ -5,11 +5,27 @@ import psutil
 import param
 import time
 import gc
+import warnings
 from copy import deepcopy
 
 import panel as pn
 
 pn.extension("tabulator", "gridstack")
+
+# Silence sklearn's InconsistentVersionWarning during analyzer load. The
+# warning itself is informational, but some upstream code in the
+# spikeinterface / spikeinterface-gui stack constructs the warning class
+# with a positional arg, which crashes because its __init__ is kwarg-only
+# (`__init__() takes 1 positional argument but 2 were given`). Suppressing
+# the warning prevents any reactive code path that re-emits it from firing.
+# Belt-and-braces with the scikit-learn==1.8.0 pin in the Dockerfile, which
+# avoids the version mismatch in the common case but doesn't help when
+# loading older analyzers saved with sklearn < 1.8.0.
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
 
 
 from spikeinterface_gui import run_mainwindow
@@ -474,12 +490,63 @@ class EphysGuiView(param.Parameterized):
         if sigui_win is not None:
             controller = getattr(sigui_win, "controller", None)
             if controller is not None:
-                # Clear views list — each view has param watchers holding back-refs
+                # Break the SignalHandler ↔ Controller back-edge BEFORE we
+                # touch the views, so even partial failures still detach the
+                # graph from the controller.
+                signal_handler = getattr(controller, "signal_handler", None)
+                if signal_handler is not None:
+                    try:
+                        signal_handler.controller = None
+                    except Exception:
+                        pass
+
+                # Each view has TWO sets of param watchers, plus three back-refs
+                # to the controller graph that the gc cycle collector can't break
+                # because SignalHandler.controller is a strong external ref into
+                # the cycle. Break them all here:
+                #   - view.settings._parameterized watchers   (settings change → refresh)
+                #   - view.notifier watchers                  (signal handler → 8 bound methods)
+                #   - view.notifier.view = view               (direct cycle)
+                #   - view.controller = controller            (back-ref)
+                #   - view.tour_timer (ndscatterview only)    (pn.state.add_periodic_callback)
                 for view in list(getattr(controller, "views", [])):
                     try:
                         view.settings._parameterized.param.unwatch_all()
                     except Exception:
                         pass
+                    try:
+                        view.notifier.param.unwatch_all()
+                    except Exception:
+                        pass
+                    notifier = getattr(view, "notifier", None)
+                    if notifier is not None:
+                        try:
+                            notifier.view = None
+                        except Exception:
+                            pass
+                    try:
+                        view.notifier = None
+                    except Exception:
+                        pass
+                    try:
+                        view.controller = None
+                    except Exception:
+                        pass
+                    # Stop per-view periodic callbacks. Only ndscatterview's
+                    # "Random tour" registers one today, but list-driven so
+                    # adding new ones upstream doesn't silently leak.
+                    for cb_attr in ("tour_timer",):
+                        cb = getattr(view, cb_attr, None)
+                        if cb is not None:
+                            try:
+                                cb.stop()
+                            except Exception:
+                                pass
+                            try:
+                                setattr(view, cb_attr, None)
+                            except Exception:
+                                pass
+
                 controller.views = []
                 # Clear PanelMainWindow's view dicts too
                 sigui_win.views = {}
