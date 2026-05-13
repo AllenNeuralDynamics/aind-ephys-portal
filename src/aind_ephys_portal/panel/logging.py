@@ -161,12 +161,14 @@ def get_safe_max_ram_pct():
 
 
 def get_per_session_estimate_pct():
-    """Rough peak RAM cost of one session as a percent of container memory.
+    """Fallback peak RAM cost of one session as a percent of container memory.
 
-    Used to predict post-admit RAM before deciding whether to admit. Should
-    be on the pessimistic side — better to under-admit than OOM.
+    Used by ``can_admit_new_session()`` when the caller cannot supply a more
+    accurate per-session estimate (e.g., the analyzer pre-load failed).
+    The portal normally passes a *dynamic* estimate computed from the
+    analyzer's unit count — see :func:`estimate_session_ram_bytes`.
     """
-    return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "25"))
+    return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "35"))
 
 
 def get_hard_cap_sessions():
@@ -182,13 +184,41 @@ def get_hard_cap_sessions():
     return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
 
 
-def can_admit_new_session(current_count=None, used_pct=None):
+def estimate_session_ram_bytes(analyzer, fast_mode=False):
+    """Estimate peak RAM cost of one GUI session for the given analyzer.
+
+    Empirical fit from production traces:
+      * full load (waveforms + PCA + templates + similarity): ~15 MB / unit
+      * fast_mode (skips waveforms + principal_components):  ~5 MB / unit
+      * plus a baseline ~250 MB (recording skeleton + Bokeh document
+        overhead + view widgets that don't scale with unit count)
+      * × 1.2 safety multiplier to absorb variance
+
+    Returns bytes. Safe to call on an analyzer loaded with
+    ``load_extensions=False`` — only the ``unit_ids`` attribute is read.
+    """
+    try:
+        num_units = len(analyzer.unit_ids)
+    except Exception:
+        num_units = 0
+    per_unit_mb = 5 if fast_mode else 15
+    base_mb = 250
+    safety = 1.2
+    estimated_mb = (base_mb + num_units * per_unit_mb) * safety
+    return int(estimated_mb * 1024 * 1024)
+
+
+def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
     """Return True iff this task should accept one more session right now.
 
-    Predicts post-admit RAM as ``current_used + per_session_estimate`` and
-    rejects if it'd exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
-    already reached. Caller may pass ``current_count`` and ``used_pct`` to
-    avoid a second filesystem/cgroup read per request.
+    Predicts post-admit RAM as ``current_used + estimate_pct`` and rejects
+    if it would exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
+    already reached. ``estimate_pct`` is the per-session percent of
+    container memory; if ``None``, falls back to the static
+    :func:`get_per_session_estimate_pct`. Callers should pass a dynamic
+    value derived from :func:`estimate_session_ram_bytes` when possible —
+    a 100-unit session needs much less headroom than a 500-unit one, and
+    a fixed 35% over- or under-budgets both.
     """
     if current_count is None:
         current_count = len(list_gui_sessions())
@@ -196,7 +226,9 @@ def can_admit_new_session(current_count=None, used_pct=None):
         return False
     if used_pct is None:
         used_pct = get_container_used_memory() / get_container_total_memory() * 100
-    projected = used_pct + get_per_session_estimate_pct()
+    if estimate_pct is None:
+        estimate_pct = get_per_session_estimate_pct()
+    projected = used_pct + estimate_pct
     return projected < get_safe_max_ram_pct()
 
 

@@ -47,10 +47,12 @@ TARGET_INFLATE_DELAY_SECONDS = 90
 
 # Recycle signal: when a task is sitting idle (0 GUI sessions) but its RAM
 # stays above this percent, /health returns 503 so the ALB deregisters it
-# and the ECS service scheduler replaces it. Overridable via env var so we
-# can tune without redeploys once we re-baseline post-rollback. Only
-# triggers with 0 sessions, so user sessions are never cut.
-RECYCLE_RAM_PERCENT_WHEN_IDLE = int(os.environ.get("RECYCLE_RAM_PERCENT_WHEN_IDLE", "50"))
+# and the ECS service scheduler replaces it. Warm baseline is ~10%, so 30%
+# tolerates ~20 points of accumulated residue before recycling — enough
+# margin for transient post-cleanup glibc fragmentation, tight enough to
+# catch the per-session drip before it compounds into a poisoned task.
+# Only triggers with 0 sessions, so user sessions are never cut.
+RECYCLE_RAM_PERCENT_WHEN_IDLE = int(os.environ.get("RECYCLE_RAM_PERCENT_WHEN_IDLE", "30"))
 
 
 if LOG_DIR.is_dir():
