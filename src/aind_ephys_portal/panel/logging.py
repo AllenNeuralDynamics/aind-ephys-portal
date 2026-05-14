@@ -184,7 +184,7 @@ def get_hard_cap_sessions():
     return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
 
 
-def estimate_session_ram_bytes(analyzer, fast_mode=False):
+def estimate_session_ram_bytes(num_units, fast_mode=False):
     """Estimate peak RAM cost of one GUI session for the given analyzer.
 
     Empirical fit from production traces:
@@ -192,15 +192,10 @@ def estimate_session_ram_bytes(analyzer, fast_mode=False):
       * fast_mode (skips waveforms + principal_components):  ~5 MB / unit
       * plus a baseline ~250 MB (recording skeleton + Bokeh document
         overhead + view widgets that don't scale with unit count)
-      * × 1.2 safety multiplier to absorb variance
+      * x1.2 safety multiplier to absorb variance
 
-    Returns bytes. Safe to call on an analyzer loaded with
-    ``load_extensions=False`` — only the ``unit_ids`` attribute is read.
+    Returns bytes.
     """
-    try:
-        num_units = len(analyzer.unit_ids)
-    except Exception:
-        num_units = 0
     per_unit_mb = 5 if fast_mode else 15
     base_mb = 250
     safety = 1.2

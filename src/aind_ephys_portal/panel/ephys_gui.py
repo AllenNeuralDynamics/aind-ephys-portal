@@ -210,37 +210,27 @@ class EphysGuiView(param.Parameterized):
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
         total_ram_bytes = get_container_total_memory()
 
-        # Try to derive a *dataset-specific* RAM estimate by pre-loading the
-        # analyzer with no extensions and reading its unit count. This costs
-        # one S3 round-trip (~1-3s) but lets us accurately predict heavy
-        # sessions instead of relying on a fixed percent. We stash the
-        # pre-loaded analyzer in a SEPARATE attribute (NOT self.analyzer) —
-        # _create_main_window() below checks `self.analyzer is not None` to
-        # decide whether to render the real GUI vs the help text, and an
-        # analyzer without extensions would cause run_mainwindow to fail
-        # silently, leaving the loading banner stuck forever.
-        # _initialize_analyzer() transfers _preloaded_analyzer → self.analyzer
-        # later, after the layout is set up correctly.
-        self._preloaded_analyzer = None
+        # Try to derive a *dataset-specific* RAM estimate by reading the unit counts
+        # unit count. This costs one S3 round-trip (~1-3s) but lets us accurately predict heavy
+        # sessions instead of relying on a fixed percent.
         estimate_pct = None
-        estimate_units = None
+        num_units = None
         if self.analyzer_path and self.analyzer_path.endswith((".zarr", ".zarr/")):
             try:
-                self._preloaded_analyzer = si.load(self.analyzer_path, load_extensions=False)
-                estimate_units = len(self._preloaded_analyzer.unit_ids)
-                est_bytes = estimate_session_ram_bytes(self._preloaded_analyzer, fast_mode=self.fast_mode)
+                root = super_zarr_open(self.analyzer_path)
+                num_units = len(root["sorting/unit_ids"])
+                est_bytes = estimate_session_ram_bytes(num_units, fast_mode=self.fast_mode)
                 estimate_pct = est_bytes / total_ram_bytes * 100
                 print(
                     f"Dynamic per-session RAM estimate: "
                     f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
-                    f"for {estimate_units} units, fast_mode={self.fast_mode}"
+                    f"for {num_units} units, fast_mode={self.fast_mode}"
                 )
             except Exception as e:
                 # Pre-load failed (S3 transient, bad path, etc.) — fall back
                 # to the static estimate. Better to occasionally reject a
                 # session we could have admitted than to OOM.
-                self._preloaded_analyzer = None
-                print(f"Could not pre-load analyzer for size estimate: {e}. Using static fallback.")
+                print(f"Could not pre-load # units for size estimate: {e}. Using static fallback.")
 
         # Pass the count of OTHER existing sessions (not this one) so
         # can_admit_new_session can answer "is there room for one more?".
@@ -249,8 +239,6 @@ class EphysGuiView(param.Parameterized):
             used_pct=ram_percent,
             estimate_pct=estimate_pct,
         ):
-            # Drop the pre-loaded analyzer so its memory is released
-            self._preloaded_analyzer = None
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
@@ -263,7 +251,7 @@ class EphysGuiView(param.Parameterized):
             if existing_gui_sessions >= hard_cap:
                 reason = f"hard session cap reached ({existing_gui_sessions}/{hard_cap})"
             else:
-                source = f"{estimate_units} units" if estimate_units is not None else "static fallback"
+                source = f"{num_units} units" if num_units is not None else "static fallback"
                 reason = (
                     f"insufficient RAM headroom: current {ram_percent:.1f}% + "
                     f"~{effective_estimate:.1f}% (estimated from {source}) would "
@@ -448,20 +436,9 @@ class EphysGuiView(param.Parameterized):
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
             raise ValueError("Only Zarr files are supported for now.")
-        # The admission step in __init__ may have already pre-loaded the
-        # analyzer (load_extensions=False) into self._preloaded_analyzer to
-        # compute the dynamic RAM estimate. Transfer it now to self.analyzer
-        # (the canonical attribute the rest of the code reads), and clear
-        # the temporary handle. If pre-load wasn't done or failed, fall
-        # back to a fresh si.load() here.
-        preloaded = getattr(self, "_preloaded_analyzer", None)
-        if preloaded is not None:
-            print(f"Reusing pre-loaded analyzer (skipped re-fetching from S3).")
-            self.analyzer = preloaded
-            self._preloaded_analyzer = None
-        else:
-            print(f"Loading analyzer...")
-            self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+
+        print(f"Loading analyzer...")
+        self.analyzer = si.load(self.analyzer_path, load_extensions=False)
         print(f"Analyzer loaded: {self.analyzer}")
 
     def _set_processed_recording(self):
@@ -543,10 +520,6 @@ class EphysGuiView(param.Parameterized):
         self.curation_listener = None
         self.fullscreen_listener = None
         self.submit_trigger = None
-        # Pre-loaded analyzer should already have been transferred to
-        # self.analyzer by _initialize_analyzer, but null it explicitly
-        # in case the session was rejected or failed before _initialize.
-        self._preloaded_analyzer = None
 
         # 2) Release GUI controller and all its data
         sigui_win = getattr(self, "sigui_win", None)
