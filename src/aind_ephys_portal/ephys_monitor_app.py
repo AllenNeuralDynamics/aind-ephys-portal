@@ -259,7 +259,7 @@ task_tabulator = pn.widgets.Tabulator(
     theme="simple",
     frozen_columns=["PID"],
     sorters=[{"field": "CPU %", "dir": "desc"}],
-    height=600,
+    min_height=600,
 )
 
 

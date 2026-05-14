@@ -1,6 +1,7 @@
 """Main Panel application for the AIND SIGUI Portal."""
 
 import os
+import threading
 import param
 import panel as pn
 import pandas as pd
@@ -9,7 +10,7 @@ import boto3
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
 from aind_ephys_portal.panel.utils import format_link, OUTER_STYLE, EPHYSGUI_LINK_PREFIX
-from aind_ephys_portal.panel.logging import setup_logging
+from aind_ephys_portal.panel.logging import setup_logging, get_container_total_memory, get_container_used_memory
 
 s3_client = boto3.client("s3")
 
@@ -30,8 +31,9 @@ class EphysPortal:
         setup_logging()  # Ensure logging is set up for this panel
         # for test deployment, use v1 by default
         default_db_version = "v2" if os.environ.get("TEST_ENV", "0") == "0" else "v1"
-        # Initialize search options with default database version
-        self.search_options = SearchOptions(database_version=default_db_version)
+        # Initialize search options without blocking on database load
+        self.search_options = SearchOptions(database_version=default_db_version, defer_load=True)
+        self._db_loading = False
         # Get the search input widget
         self.search_bar = pn.widgets.TextInput(
             name="Search",
@@ -46,18 +48,23 @@ class EphysPortal:
         """
         self.results_panel = pn.widgets.Tabulator(
             pd.DataFrame(columns=["name", "subject_id", "date", "id"]),  # Empty DataFrame initially
-            height=400,
+            min_height=400,
             selectable=True,
             disabled=True,
             show_index=False,
             stylesheets=[stylesheet],
             styles={"background-color": "#f5f5f5", "padding": "20px", "border-radius": "5px"},
         )
+        self._results_loading_pane = pn.pane.Markdown(
+            "*Loading Database...*",
+            styles={"background-color": "#f5f5f5", "padding": "20px", "border-radius": "5px", "min-height": "200px"},
+        )
+        self.results_container = pn.Column(self._results_loading_pane)
 
         # Create a streams panel to display postprocessed streams for the selected entry
         self.streams_panel = pn.widgets.Tabulator(
             pd.DataFrame(columns=["Stream name", "Ephys GUI View"]),  # Empty DataFrame initially
-            height=200,
+            min_height=200,
             sizing_mode="stretch_width",
             show_index=False,
             disabled=True,
@@ -66,6 +73,11 @@ class EphysPortal:
             stylesheets=[stylesheet],
             styles={"background-color": "#f5f5f5", "padding": "20px", "border-radius": "5px"},
         )
+        self._streams_loading_pane = pn.pane.Markdown(
+            "*Loading postprocessed streams...*",
+            styles={"background-color": "#f5f5f5", "padding": "20px", "border-radius": "5px", "min-height": "100px"},
+        )
+        self.streams_container = pn.Column(self.streams_panel)
 
         # Update the results panel when the search input changes
         self.search_bar.param.watch(self.update_results, "value")
@@ -79,8 +91,47 @@ class EphysPortal:
         self.database_version_dropdown.param.watch(self.update_db_version, "value")
         self.refresh_button = pn.widgets.Button(name="Refresh Datasets", button_type="primary", height=30, width=150)
         self.refresh_button.on_click(self.update_results)
-        # Initialize with current results
-        self.update_results(None)
+        # Load database in a background thread so the UI renders immediately
+        self._load_database()
+
+    def _run_in_background(self, target, on_complete):
+        """Run *target()* in a daemon thread; schedule *on_complete(result)* on the UI thread."""
+        def _worker():
+            result = target()
+            pn.state.execute(lambda: on_complete(result))
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def _set_db_loading(self, loading):
+        """Toggle the loading state and enable/disable controls accordingly."""
+        self._db_loading = loading
+        self.refresh_button.disabled = loading
+        self.database_version_dropdown.disabled = loading
+
+    def _load_database(self):
+        """Kick off a background thread to load/reload the database."""
+        self._set_db_loading(True)
+        self.results_container[:] = [self._results_loading_pane]
+        self.streams_container[:] = [self.streams_panel]
+        self.streams_panel.value = pd.DataFrame(columns=["Stream name", "Ephys GUI View"])
+
+        def _do_load():
+            used = get_container_used_memory()
+            total = get_container_total_memory()
+            print(f"[Portal] RAM before DB load: {used / (1024**3):.2f} GB / {total / (1024**3):.2f} GB ({used / total * 100:.1f}%)")
+            self.search_options.update_options()
+            used = get_container_used_memory()
+            print(f"[Portal] RAM after DB load:  {used / (1024**3):.2f} GB / {total / (1024**3):.2f} GB ({used / total * 100:.1f}%)")
+            return self.search_options.df
+
+        def _on_loaded(df):
+            self._set_db_loading(False)
+            self.results_panel.value = df
+            self.results_container[:] = [self.results_panel]
+            print("Database loaded.")
+
+        self._run_in_background(_do_load, _on_loaded)
 
     def update_db_version(self, event):
         """Update the database version used for searching."""
@@ -88,8 +139,7 @@ class EphysPortal:
             new_version = event.new
             print(f"Switching to database version: {new_version}")
             self.search_options.database_version = new_version
-            self.search_options.update_options()
-            self.update_results(None)
+            self._load_database()
 
     def update_results(self, event):
         """Update the results panel with the current search results."""
@@ -97,14 +147,20 @@ class EphysPortal:
         if event is None:
             df = self.search_options.df
         elif event.name == "clicks":
-            self.search_options.update_options()
-            df = self.search_options.df
+            # Refresh button: reload from database in a background thread
+            self._load_database()
+            return
         else:
             # Filter the DataFrame based on the search input
+            if self._db_loading:
+                # Database is still loading; nothing to filter yet
+                return
             df = self.search_options.df_filtered(event.new)
         self.results_panel.value = df
+        self.results_container[:] = [self.results_panel]
         # Clear the streams panel when results are updated
         self.streams_panel.value = pd.DataFrame(columns=["Stream name", "Ephys GUI View"])
+        self.streams_container[:] = [self.streams_panel]
 
     def update_streams(self, event):
         """Update the streams panel with the postprocessed streams for the selected entry."""
@@ -122,48 +178,57 @@ class EphysPortal:
                 asset_name = record.get("name", "")
                 location = record.get("location", "")
 
-                loading_text = f"Loading postprocessed streams..."
-                streams_df = pd.DataFrame({"Stream name": [loading_text], "Ephys GUI View": [""]})
-                self.streams_panel.value = streams_df
+                # Show loading pane while fetching streams in background
+                self.streams_container[:] = [self._streams_loading_pane]
 
-                # Get the postprocessed streams for this location
-                stream_names = self.search_options.get_postprocessed_streams(location)
-                print(f"Found {len(stream_names)} postprocessed streams from {location}")
-                analyzer_base_location = record["location"]
-                raw_asset = get_raw_asset_by_name(asset_name, version=db_version)[0]
-                links_url = []
-                for stream_name in stream_names:
-                    raw_stream_name = stream_name[: stream_name.find("_recording")]
-                    raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
-                    print(f"Raw asset prefix: {raw_asset_prefix}")
-                    if raw_asset_prefix is None:
-                        recording_path = ""
-                    else:
-                        recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
-                    analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
-                    if not analyzer_path.endswith(".zarr"):
-                        link_url = "Only Zarr files are supported."
-                    else:
-                        link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, asset_name).replace(
-                            "#", "%23"
-                        )
-                    links_url.append(link_url)
-                links = []
-                for link in links_url:
-                    if "ephys_gui_app" in link:
-                        links.append(format_link(link, text="SpikeInterface-GUI"))
-                    else:
-                        links.append(link)
+                # Fetch streams data in a background thread to avoid blocking the UI
+                def _on_streams_loaded(result_df):
+                    self.streams_panel.value = result_df
+                    self.streams_container[:] = [self.streams_panel]
 
-                # Update the streams panel
-                streams_df = pd.DataFrame({"Stream name": stream_names, "Ephys GUI View": links})
-                self.streams_panel.value = streams_df
+                self._run_in_background(
+                    lambda: self._fetch_streams_data(record, asset_name, location, db_version),
+                    _on_streams_loaded,
+                )
                 return
 
-        # If no matching record is found, clear the streams panel
-        no_streams_text = f"No postprocessed streams..."
-        streams_df = pd.DataFrame({"Stream name": [no_streams_text], "Ephys GUI View": [""]})
-        self.streams_panel.value = streams_df
+        # If no matching record is found, show message
+        self.streams_container[:] = [pn.pane.Markdown(
+            "*No postprocessed streams...*",
+            styles={"background-color": "#f5f5f5", "padding": "20px", "border-radius": "5px"},
+        )]
+
+    def _fetch_streams_data(self, record, asset_name, location, db_version):
+        """Blocking helper that fetches postprocessed stream data (runs in a background thread)."""
+        stream_names = self.search_options.get_postprocessed_streams(location)
+        print(f"Found {len(stream_names)} postprocessed streams from {location}")
+        analyzer_base_location = record["location"]
+        raw_asset = get_raw_asset_by_name(asset_name, version=db_version)[0]
+        links_url = []
+        for stream_name in stream_names:
+            raw_stream_name = stream_name[: stream_name.find("_recording")]
+            raw_asset_prefix = self.get_raw_asset_location(raw_asset["location"])
+            print(f"Raw asset prefix: {raw_asset_prefix}")
+            if raw_asset_prefix is None:
+                recording_path = ""
+            else:
+                recording_path = f"{raw_asset_prefix}/{raw_stream_name}.zarr"
+            analyzer_path = f"{analyzer_base_location}/postprocessed/{stream_name}"
+            if not analyzer_path.endswith(".zarr"):
+                link_url = "Only Zarr files are supported."
+            else:
+                link_url = EPHYSGUI_LINK_PREFIX.format(analyzer_path, recording_path, asset_name).replace(
+                    "#", "%23"
+                )
+            links_url.append(link_url)
+        links = []
+        for link in links_url:
+            if "ephys_gui_app" in link:
+                links.append(format_link(link, text="SpikeInterface-GUI"))
+            else:
+                links.append(link)
+
+        return pd.DataFrame({"Stream name": stream_names, "Ephys GUI View": links})
 
     def get_raw_asset_location(self, asset_location):
         asset_without_s3 = asset_location[asset_location.find("s3://") + 5 :]
@@ -196,10 +261,10 @@ class EphysPortal:
             self.refresh_button,
             pn.layout.Divider(),
             pn.pane.Markdown("## Search Results", styles={"text-align": "left"}),
-            self.results_panel,
+            self.results_container,
             pn.layout.Divider(),
             pn.pane.Markdown("## Postprocessed Streams", styles={"text-align": "left"}),
-            self.streams_panel,
+            self.streams_container,
             min_width=1500,
             styles=OUTER_STYLE,
             align="center",
@@ -212,16 +277,15 @@ class EphysPortal:
 class SearchOptions(param.Parameterized):
     """Search options for the Ephys Portal."""
 
-    def __init__(self, database_version="v2"):
+    def __init__(self, database_version="v2", defer_load=False):
         """Initialize a search options object."""
         super().__init__()
         self.database_version = database_version
+        self.all_records = []
+        self.df = pd.DataFrame(columns=["name", "subject_id", "date", "id"])
 
-        self.update_options()
-
-        # Sort by date if available
-        if not self.df.empty and "date" in self.df.columns:
-            self.df = self.df.sort_values(by="date", ascending=False)
+        if not defer_load:
+            self.update_options()
 
     def update_options(self):
         # Get initial data
@@ -249,8 +313,10 @@ class SearchOptions(param.Parameterized):
         except Exception as e:
             print(f"Error loading initial data: {e}.")
 
-        # Create DataFrame
+        # Create DataFrame and sort by date if available
         self.df = pd.DataFrame(data, columns=["name", "subject_id", "date", "id"])
+        if not self.df.empty and "date" in self.df.columns:
+            self.df = self.df.sort_values(by="date", ascending=False)
 
     def get_postprocessed_streams(self, location):
         """Get the postprocessed folders for a given location."""
