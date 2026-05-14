@@ -32,6 +32,7 @@ from spikeinterface_gui import run_mainwindow
 
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
+from spikeinterface.core.zarrextractors import super_zarr_open
 from spikeinterface.curation import validate_curation_dict
 
 from aind_ephys_portal.panel.logging import (
