@@ -1,18 +1,40 @@
+import asyncio
+import gc
 import os
 import shutil
 import threading
+import time as _time
+import tracemalloc
 from argparse import ArgumentParser
+from collections import Counter
 
 import numpy as np
 import psutil
 import panel as pn
 from tornado.web import RequestHandler
 
+# tracemalloc is OFF by default. Recording a per-allocation Python traceback
+# adds non-trivial CPU overhead per allocation; on a Panel + spikeinterface
+# + zarr workload that slowed Tornado enough for ECS health checks to time
+# out, producing exit-137 restart loops. Enable only on diagnostic deploys:
+#   TRACEMALLOC_ENABLED=1  (and optionally TRACEMALLOC_DEPTH, default 4)
+_TRACEMALLOC_ENABLED = os.environ.get("TRACEMALLOC_ENABLED", "0").lower() in ("1", "true", "yes")
+_tracemalloc_baseline = None
+if _TRACEMALLOC_ENABLED:
+    _tm_depth = int(os.environ.get("TRACEMALLOC_DEPTH", "4"))
+    tracemalloc.start(_tm_depth)
+    _tracemalloc_baseline = tracemalloc.take_snapshot()
+    print(f"tracemalloc ENABLED with frame depth {_tm_depth}")
+else:
+    print("tracemalloc DISABLED (set TRACEMALLOC_ENABLED=1 to enable)")
+
 # 1. Run setup (replaces --setup flag)
-from aind_ephys_portal.setup import *  # noqa: F401,F403
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
+from aind_ephys_portal.panel.logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
+    can_admit_new_session,
+    get_hard_cap_sessions,
     get_container_total_memory,
     get_container_used_memory,
     get_ecs_task_id,
@@ -22,6 +44,15 @@ from aind_ephys_portal.panel.logging import (
 TARGET_MEMORY_TRIGGER_PERCENT = 70
 TARGET_CLEAR_TMP_ARR_SECONDS = 180
 TARGET_INFLATE_DELAY_SECONDS = 90
+
+# Recycle signal: when a task is sitting idle (0 GUI sessions) but its RAM
+# stays above this percent, /health returns 503 so the ALB deregisters it
+# and the ECS service scheduler replaces it. Warm baseline is ~10%, so 30%
+# tolerates ~20 points of accumulated residue before recycling — enough
+# margin for transient post-cleanup glibc fragmentation, tight enough to
+# catch the per-session drip before it compounds into a poisoned task.
+# Only triggers with 0 sessions, so user sessions are never cut.
+RECYCLE_RAM_PERCENT_WHEN_IDLE = int(os.environ.get("RECYCLE_RAM_PERCENT_WHEN_IDLE", "30"))
 
 
 if LOG_DIR.is_dir():
@@ -73,30 +104,45 @@ class HealthHandler(RequestHandler):
         mem_percent = used_memory / total_memory * 100
         # count number of GUI app sessions
         gui_sessions = list_gui_sessions()
+        num_sessions = len(gui_sessions)
         task_id = get_ecs_task_id()
-        max_gui_sessions = get_max_number_of_gui_sessions()
+        hard_cap = get_hard_cap_sessions()
 
-        if mem_percent > TARGET_MEMORY_TRIGGER_PERCENT:
-            self.set_status(200)
+        # Idle-but-bloated → ask ALB to deregister so ECS replaces us.
+        # GUI-level enforcement protects against admitting too many sessions,
+        # but only the load balancer can take a leaky task out of rotation.
+        if num_sessions == 0 and mem_percent > RECYCLE_RAM_PERCENT_WHEN_IDLE:
+            self.set_status(503)
             self.write(
-                f"Busy (RAM Usage):\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
+                f"Unhealthy (recycle): Memory at {mem_percent:.1f}% with 0 sessions - Task ID: {task_id}"
             )
-        elif len(gui_sessions) >= max_gui_sessions:
+            return
+
+        # "Operationally full" = at least one session AND can't fit another
+        # without crossing the safe RAM ceiling or hitting the hard count cap.
+        # This unifies the old (count-based) and RAM-based busy paths into one
+        # predicate that's accurate for both light and heavy sessions.
+        full = num_sessions > 0 and not can_admit_new_session(
+            current_count=num_sessions, used_pct=mem_percent
+        )
+
+        if full:
             self.set_status(200)
-            # inflate RAM once per threshold-exceeded event so ECS spawns a new task;
-            # wait TARGET_INFLATE_DELAY_SECONDS first so existing sessions finish loading
+            # inflate RAM once per "full" event so ECS spawns a new task;
+            # wait TARGET_INFLATE_DELAY_SECONDS first so loading sessions
+            # have time to finish.
             if _tmp_arr is None and _inflate_delay_timer is None and not _tmp_array_triggered:
                 _tmp_array_triggered = True
                 print(
-                    f"Max sessions reached, will inflate memory in {TARGET_INFLATE_DELAY_SECONDS}s"
+                    f"Task is full ({num_sessions} sessions, {mem_percent:.1f}% RAM); "
+                    f"will inflate memory in {TARGET_INFLATE_DELAY_SECONDS}s"
                 )
                 _inflate_delay_timer = threading.Timer(
                     TARGET_INFLATE_DELAY_SECONDS, _inflate_memory
                 )
                 _inflate_delay_timer.daemon = True
                 _inflate_delay_timer.start()
-            busy_msg = "(MAX SESSIONS REACHED)"
+            busy_msg = "(FULL)"
             if _tmp_arr is not None:
                 busy_msg += " (inflating memory)"
             elif _inflate_delay_timer is not None:
@@ -104,8 +150,8 @@ class HealthHandler(RequestHandler):
             elif _tmp_array_triggered:
                 busy_msg += " (inflated memory released)"
             self.write(
-                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
+                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
         else:
             _tmp_array_triggered = False
@@ -114,14 +160,222 @@ class HealthHandler(RequestHandler):
                 _inflate_delay_timer = None
             self.set_status(200)
             self.write(
-                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {len(gui_sessions)} "
-                f"(max {max_gui_sessions}) Task ID: {task_id}"
+                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
 
 
 class IndexRedirectHandler(RequestHandler):
     def get(self):
         self.redirect("/ephys_portal_app")
+
+
+# /debug/memory does heavy work (gc.collect + walking gc.get_objects, which
+# can iterate millions of objects). Doing that on the Tornado event loop
+# thread blocks /health for long enough to trip ECS health checks → task
+# gets replaced. So we (1) run the heavy work in an executor thread,
+# (2) allow only one in-flight build via a lock, and (3) cache the result
+# for a short TTL so polling clients don't repeatedly trigger the work.
+_DEBUG_MEM_LOCK = asyncio.Lock()
+_DEBUG_MEM_CACHE = {"ts": 0.0, "body": ""}
+_DEBUG_MEM_CACHE_TTL = 30.0  # seconds
+
+
+def _build_debug_memory_payload():
+    """Heavy synchronous work — must be called from an executor thread."""
+    task_id = get_ecs_task_id()
+    total_memory = get_container_total_memory()
+    used_memory = get_container_used_memory()
+    mem_percent = used_memory / total_memory * 100
+    gui_sessions = list_gui_sessions()
+
+    # One gc.collect() is enough — two was overkill and adds latency.
+    gc.collect()
+
+    # Single pass over gc.get_objects(): count types AND sum numpy bytes
+    # in one walk. Halves the time vs the previous two-pass version.
+    type_counts = Counter()
+    np_bytes = 0
+    np_count = 0
+    for obj in gc.get_objects():
+        type_counts[type(obj).__name__] += 1
+        if isinstance(obj, np.ndarray):
+            np_bytes += obj.nbytes
+            np_count += 1
+    top_types = type_counts.most_common(30)
+
+    # fsspec/s3fs cache state
+    fsspec_info = []
+    try:
+        from fsspec import AbstractFileSystem
+
+        fsspec_info.append(
+            f"fsspec AbstractFileSystem._cache size: {len(AbstractFileSystem._cache)}"
+        )
+        for key, fs in list(AbstractFileSystem._cache.items())[:10]:
+            fsspec_info.append(f"  - {type(fs).__name__}: protocol={getattr(fs, 'protocol', '?')}")
+    except Exception as e:
+        fsspec_info.append(f"fsspec inspection failed: {e}")
+
+    # tracemalloc top allocators since the recorded baseline. Use is_tracing()
+    # so runtime POST /debug/tracemalloc/{start,stop} toggles are reflected
+    # automatically — no need to read a separate module-level flag.
+    tm_lines = []
+    if not tracemalloc.is_tracing():
+        tm_lines.append("tracemalloc disabled (POST /debug/tracemalloc/start to enable)")
+    elif _tracemalloc_baseline is None:
+        tm_lines.append("tracemalloc tracing, but no baseline snapshot yet")
+    else:
+        try:
+            current = tracemalloc.take_snapshot()
+            stats = current.compare_to(_tracemalloc_baseline, "lineno")[:25]
+            for stat in stats:
+                tm_lines.append(
+                    f"  +{stat.size_diff/1024/1024:7.2f} MiB ({stat.count_diff:+d} blocks)  {stat.traceback[0]}"
+                )
+        except Exception as e:
+            tm_lines.append(f"tracemalloc error: {e}")
+
+    out = [
+        f"=== Task {task_id} ===",
+        f"Memory: {mem_percent:.1f}%  ({used_memory/1024**3:.2f} / {total_memory/1024**3:.2f} GB)",
+        f"GUI sessions: {len(gui_sessions)}",
+        "",
+        "--- Top object types by count ---",
+    ]
+    for name, count in top_types:
+        out.append(f"  {count:>10d}  {name}")
+    out.extend(["", "--- Buffer bytes ---"])
+    mib = np_bytes / 1024 / 1024
+    out.append(f"  numpy.ndarray: {np_count} objects, {mib:.1f} MiB")
+    out.extend(["", "--- fsspec ---"])
+    out.extend(fsspec_info)
+    out.extend(["", "--- tracemalloc (top 25 since boot) ---"])
+    out.extend(tm_lines)
+    return "\n".join(out)
+
+
+class DebugMemoryHandler(RequestHandler):
+    """Live introspection for diagnosing memory retention on a bloated task.
+
+    Returns top object counts (via gc.get_objects), top allocation sites
+    (tracemalloc snapshot diff vs. boot baseline), and fsspec/s3fs instance
+    cache sizes. Gated by DEBUG_MEMORY_TOKEN env var. Heavy work runs in a
+    thread executor with a 1-in-flight lock and a 30s result cache so the
+    Tornado event loop stays free to answer /health.
+    """
+
+    async def get(self):
+        token = os.environ.get("DEBUG_MEMORY_TOKEN")
+        if token and self.request.headers.get("X-Debug-Token") != token:
+            self.set_status(401)
+            self.write("Unauthorized: missing or wrong X-Debug-Token header")
+            return
+
+        # Serve cached result if fresh.
+        now = _time.monotonic()
+        if _DEBUG_MEM_CACHE["body"] and now - _DEBUG_MEM_CACHE["ts"] < _DEBUG_MEM_CACHE_TTL:
+            self.set_header("Content-Type", "text/plain; charset=utf-8")
+            self.set_header("X-Debug-Cache", "hit")
+            age = now - _DEBUG_MEM_CACHE["ts"]
+            self.write(f"[cached snapshot, age {age:.1f}s — TTL {_DEBUG_MEM_CACHE_TTL:.0f}s]\n\n")
+            self.write(_DEBUG_MEM_CACHE["body"])
+            return
+
+        # Reject pile-ups while a build is in flight. Caller can retry.
+        if _DEBUG_MEM_LOCK.locked():
+            self.set_status(429)
+            self.set_header("Retry-After", "5")
+            self.write("Another /debug/memory build is in flight; retry in a few seconds.")
+            return
+
+        async with _DEBUG_MEM_LOCK:
+            # Re-check the cache: another request may have populated it
+            # while we were waiting on the lock.
+            now = _time.monotonic()
+            if _DEBUG_MEM_CACHE["body"] and now - _DEBUG_MEM_CACHE["ts"] < _DEBUG_MEM_CACHE_TTL:
+                body = _DEBUG_MEM_CACHE["body"]
+            else:
+                loop = asyncio.get_event_loop()
+                body = await loop.run_in_executor(None, _build_debug_memory_payload)
+                _DEBUG_MEM_CACHE["ts"] = _time.monotonic()
+                _DEBUG_MEM_CACHE["body"] = body
+
+        self.set_header("Content-Type", "text/plain; charset=utf-8")
+        self.set_header("X-Debug-Cache", "miss")
+        self.write(body)
+
+
+def _check_debug_token(handler):
+    """Returns True if request is authorized, otherwise writes 401 and returns False."""
+    token = os.environ.get("DEBUG_MEMORY_TOKEN")
+    if token and handler.request.headers.get("X-Debug-Token") != token:
+        handler.set_status(401)
+        handler.write("Unauthorized: missing or wrong X-Debug-Token header")
+        return False
+    return True
+
+
+class TracemallocStartHandler(RequestHandler):
+    """POST /debug/tracemalloc/start?depth=4 — turn tracemalloc on at runtime.
+
+    Captures a fresh baseline snapshot so subsequent /debug/memory shows
+    allocations made AFTER this point. Only affects the task this request
+    lands on (each ECS task is its own process). Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        try:
+            depth = int(self.get_argument("depth", "4"))
+        except ValueError:
+            self.set_status(400)
+            self.write("depth must be an integer")
+            return
+        if depth < 1 or depth > 25:
+            self.set_status(400)
+            self.write("depth must be between 1 and 25")
+            return
+
+        task_id = get_ecs_task_id()
+        if tracemalloc.is_tracing():
+            # Already running — refresh the baseline so the next /debug/memory
+            # diffs against "now" instead of an old snapshot.
+            _tracemalloc_baseline = tracemalloc.take_snapshot()
+            _DEBUG_MEM_CACHE["body"] = ""  # invalidate stale cached output
+            self.write(
+                f"tracemalloc already tracing on task {task_id}. "
+                f"Baseline refreshed (depth unchanged).\n"
+            )
+            return
+
+        tracemalloc.start(depth)
+        _tracemalloc_baseline = tracemalloc.take_snapshot()
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STARTED on task {task_id} with depth {depth}\n")
+
+
+class TracemallocStopHandler(RequestHandler):
+    """POST /debug/tracemalloc/stop — turn tracemalloc off at runtime.
+
+    Frees the bookkeeping memory tracemalloc accumulates. Only affects the
+    task this request lands on. Token-gated.
+    """
+
+    def post(self):
+        if not _check_debug_token(self):
+            return
+        global _tracemalloc_baseline
+        task_id = get_ecs_task_id()
+        if not tracemalloc.is_tracing():
+            self.write(f"tracemalloc was already stopped on task {task_id}\n")
+            return
+        tracemalloc.stop()
+        _tracemalloc_baseline = None
+        _DEBUG_MEM_CACHE["body"] = ""
+        self.write(f"tracemalloc STOPPED on task {task_id}\n")
 
 
 # 3. App file paths — Panel will exec these per-session with a proper context
@@ -182,7 +436,13 @@ if __name__ == "__main__":
         port=port,
         allow_websocket_origin=allow_ws,
         static_dirs={"images": os.path.join(APP_DIR, "images")},
-        extra_patterns=[(r"/health", HealthHandler), (r"/", IndexRedirectHandler)],
+        extra_patterns=[
+            (r"/health", HealthHandler),
+            (r"/debug/memory", DebugMemoryHandler),
+            (r"/debug/tracemalloc/start", TracemallocStartHandler),
+            (r"/debug/tracemalloc/stop", TracemallocStopHandler),
+            (r"/", IndexRedirectHandler),
+        ],
         check_unused_sessions=2000,
         unused_session_lifetime=5000,
         show=False,
