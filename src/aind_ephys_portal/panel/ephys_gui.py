@@ -35,7 +35,7 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.core.zarrextractors import super_zarr_open
 from spikeinterface.curation import validate_curation_dict
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     setup_logging,
     local_log_context,
     can_admit_new_session,

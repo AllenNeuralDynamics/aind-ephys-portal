@@ -10,7 +10,7 @@ import boto3
 
 from aind_ephys_portal.docdb.database import get_raw_asset_by_name, get_all_ecephys_derived
 from aind_ephys_portal.panel.utils import format_link, OUTER_STYLE, EPHYSGUI_LINK_PREFIX
-from aind_ephys_portal.panel.logging import setup_logging, get_container_total_memory, get_container_used_memory
+from aind_ephys_portal.session_logging import setup_logging, get_container_total_memory, get_container_used_memory
 
 s3_client = boto3.client("s3")
 

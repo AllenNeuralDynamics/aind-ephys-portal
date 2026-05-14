@@ -2,7 +2,7 @@ import psutil
 import pandas as pd
 import panel as pn
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     list_sessions,
     remove_session,
     get_container_total_memory,
@@ -227,12 +227,6 @@ refresh_log_tabs()
 # --- Process table (htop-like) ---
 def get_process_table():
     """Collect per-process info into a DataFrame."""
-<<<<<<< HEAD
-    rows = []
-    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent", "status"]):
-        try:
-            info = proc.info
-=======
     container_total = get_container_total_memory()
     rows = []
     for proc in psutil.process_iter(["pid", "name", "cpu_percent", "status"]):
@@ -241,28 +235,19 @@ def get_process_table():
             rss = proc.memory_info().rss
             rss_gb = rss / (1024**3)
             mem_pct = rss / container_total * 100 if container_total else 0.0
->>>>>>> origin
             rows.append(
                 {
                     "PID": info["pid"],
                     "Name": info["name"] or "",
                     "CPU %": round(info["cpu_percent"] or 0.0, 1),
-<<<<<<< HEAD
-                    "Memory %": round(info["memory_percent"] or 0.0, 1),
-=======
                     "RAM (GB)": round(rss_gb, 2),
                     "Memory %": round(mem_pct, 1),
->>>>>>> origin
                     "Status": info["status"] or "",
                 }
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-<<<<<<< HEAD
-    df = pd.DataFrame(rows, columns=["PID", "Name", "CPU %", "Memory %", "Status"])
-=======
     df = pd.DataFrame(rows, columns=["PID", "Name", "CPU %", "RAM (GB)", "Memory %", "Status"])
->>>>>>> origin
     return df.sort_values("CPU %", ascending=False).reset_index(drop=True)
 
 
@@ -274,11 +259,7 @@ task_tabulator = pn.widgets.Tabulator(
     theme="simple",
     frozen_columns=["PID"],
     sorters=[{"field": "CPU %", "dir": "desc"}],
-<<<<<<< HEAD
-    height=600,
-=======
     min_height=600,
->>>>>>> origin
 )
 
 
@@ -289,21 +270,12 @@ def refresh_process_table():
 pn.state.add_periodic_callback(refresh_process_table, period=2000)
 
 
-<<<<<<< HEAD
-# --- Accordion: Session Logs + Tasks ---
-accordion = pn.Accordion(
-    ("Session Logs", log_container),
-    ("Tasks", task_tabulator),
-    active=[0],
-    sizing_mode="stretch_both",
-=======
 # --- Tabs: Session Logs + Tasks ---
 monitor_tabs = pn.Tabs(
     ("Session Logs", log_container),
     ("Tasks", task_tabulator),
     sizing_mode="stretch_both",
     dynamic=True,
->>>>>>> origin
 )
 
 
@@ -315,11 +287,7 @@ app = pn.Column(
     pn.Row(cpu_usage_label, cpu_monitor),
     pn.pane.Markdown("## Active Sessions"),
     sessions_summary,
-<<<<<<< HEAD
-    accordion,
-=======
     monitor_tabs,
->>>>>>> origin
     sizing_mode="stretch_both",
 )
 

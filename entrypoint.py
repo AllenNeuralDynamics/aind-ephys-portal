@@ -30,7 +30,7 @@ else:
 
 # 1. Run setup (replaces --setup flag)
 from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
-from aind_ephys_portal.panel.logging import (  # noqa: E402
+from aind_ephys_portal.session_logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
     can_admit_new_session,
@@ -40,6 +40,7 @@ from aind_ephys_portal.panel.logging import (  # noqa: E402
     get_ecs_task_id,
     LOG_DIR,
 )  # noqa: F401
+from aind_ephys_portal.ecs_protection import is_protected, get_protection_status  # noqa: E402
 
 TARGET_MEMORY_TRIGGER_PERCENT = 70
 TARGET_CLEAR_TMP_ARR_SECONDS = 180
@@ -111,6 +112,9 @@ class HealthHandler(RequestHandler):
         # Idle-but-bloated → ask ALB to deregister so ECS replaces us.
         # GUI-level enforcement protects against admitting too many sessions,
         # but only the load balancer can take a leaky task out of rotation.
+        protected = is_protected()
+        prot_tag = " (protected)" if protected else ""
+
         if num_sessions == 0 and mem_percent > RECYCLE_RAM_PERCENT_WHEN_IDLE:
             self.set_status(503)
             self.write(
@@ -150,7 +154,7 @@ class HealthHandler(RequestHandler):
             elif _tmp_array_triggered:
                 busy_msg += " (inflated memory released)"
             self.write(
-                f"Busy {busy_msg}:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"Busy {busy_msg}{prot_tag}:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
                 f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
         else:
@@ -160,9 +164,22 @@ class HealthHandler(RequestHandler):
                 _inflate_delay_timer = None
             self.set_status(200)
             self.write(
-                f"Healthy:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
+                f"Healthy{prot_tag}:\nMemory at {mem_percent:.1f}% - Num sessions: {num_sessions} "
                 f"(hard cap {hard_cap}) Task ID: {task_id}"
             )
+
+
+class ProtectionStatusHandler(RequestHandler):
+    """GET /debug/protection — show current ECS task scale-in protection status."""
+
+    def get(self):
+        if not _check_debug_token(self):
+            return
+        import json as _json
+
+        status = get_protection_status()
+        self.set_header("Content-Type", "application/json; charset=utf-8")
+        self.write(_json.dumps(status, indent=2))
 
 
 class IndexRedirectHandler(RequestHandler):
@@ -441,6 +458,7 @@ if __name__ == "__main__":
             (r"/debug/memory", DebugMemoryHandler),
             (r"/debug/tracemalloc/start", TracemallocStartHandler),
             (r"/debug/tracemalloc/stop", TracemallocStopHandler),
+            (r"/debug/protection", ProtectionStatusHandler),
             (r"/", IndexRedirectHandler),
         ],
         check_unused_sessions=2000,
