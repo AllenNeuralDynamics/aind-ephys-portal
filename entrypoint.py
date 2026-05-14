@@ -173,8 +173,6 @@ class ProtectionStatusHandler(RequestHandler):
     """GET /debug/protection — show current ECS task scale-in protection status."""
 
     def get(self):
-        if not _check_debug_token(self):
-            return
         import json as _json
 
         status = get_protection_status()
