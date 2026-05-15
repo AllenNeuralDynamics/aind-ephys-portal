@@ -444,6 +444,8 @@ if __name__ == "__main__":
     if test_mode:
         print("Running in TEST MODE: connecting to test API gateway")
         os.environ["TEST_ENV"] = "1"
+        # Lower threshold on test for easier testing
+        os.environ["RECYCLE_RAM_PERCENT_WHEN_IDLE"] = "15"
 
     print(f"Ephys Portal is running on http://{address}:{port}")
     for app in apps:
