@@ -33,12 +33,12 @@ from aind_ephys_portal.setup import *  # noqa: F401,F403,E402
 from aind_ephys_portal.session_logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
-    can_admit_new_session,
     get_hard_cap_sessions,
     get_health_estimate_pct,
     get_container_total_memory,
     get_container_used_memory,
     get_ecs_task_id,
+    recent_session_rejection,
     LOG_DIR,
 )  # noqa: F401
 from aind_ephys_portal.ecs_protection import is_protected, get_protection_status  # noqa: E402
@@ -123,16 +123,15 @@ class HealthHandler(RequestHandler):
             )
             return
 
-        # "Operationally full" = at least one session AND can't fit another
-        # without crossing the safe RAM ceiling or hitting the hard count cap.
-        # We pass `get_health_estimate_pct()` so the predicate knows how large
-        # incoming sessions tend to be on this task — without it, /health
-        # would use the static fallback (35%) and miss the case where the
-        # GUI is rejecting heavy sessions that /health thinks would fit.
-        full = num_sessions > 0 and not can_admit_new_session(
-            current_count=num_sessions,
-            used_pct=mem_percent,
-            estimate_pct=get_health_estimate_pct(),
+        # "Operationally full" = either at the hard session cap, or the GUI
+        # just rejected an incoming session (RAM headroom exceeded). We do
+        # NOT predict-reject here based on a hypothetical incoming session —
+        # that would over-trigger ECS scale-up whenever a mid/heavy session
+        # is happily running. Concrete rejections are the only signal that
+        # real scaling pressure exists.
+        full = num_sessions > 0 and (
+            num_sessions >= get_hard_cap_sessions()
+            or recent_session_rejection()
         )
 
         if full:

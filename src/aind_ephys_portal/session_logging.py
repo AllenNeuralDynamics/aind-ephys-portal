@@ -207,14 +207,19 @@ def estimate_session_ram_bytes(num_units, fast_mode=False):
 def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
     """Return True iff this task should accept one more session right now.
 
-    Predicts post-admit RAM as ``current_used + estimate_pct`` and rejects
-    if it would exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
-    already reached. ``estimate_pct`` is the per-session percent of
-    container memory; if ``None``, falls back to the static
-    :func:`get_per_session_estimate_pct`. Callers should pass a dynamic
-    value derived from :func:`estimate_session_ram_bytes` when possible —
-    a 100-unit session needs much less headroom than a 500-unit one, and
-    a fixed 35% over- or under-budgets both.
+    Predicts post-admit RAM as
+    ``current_used + pending_load_pct + estimate_pct`` and rejects if it
+    would exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is already
+    reached. The ``pending_load_pct`` term covers sessions that were
+    admitted in the last :data:`_PENDING_LOAD_TTL` seconds but haven't
+    finished loading their data yet — without it, three concurrent
+    admissions all see the same low ``used_pct`` and individually pass,
+    only to OOM when their loads complete.
+
+    ``estimate_pct`` is the per-session percent of container memory; if
+    ``None``, falls back to the static :func:`get_per_session_estimate_pct`.
+    Callers should pass a dynamic value derived from
+    :func:`estimate_session_ram_bytes` when possible.
     """
     if current_count is None:
         current_count = len(list_gui_sessions())
@@ -224,67 +229,144 @@ def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
         used_pct = get_container_used_memory() / get_container_total_memory() * 100
     if estimate_pct is None:
         estimate_pct = get_per_session_estimate_pct()
-    projected = used_pct + estimate_pct
+    projected = used_pct + get_pending_load_pct() + estimate_pct
     return projected < get_safe_max_ram_pct()
 
 
-# --- Recent-max-estimate tracking (used by /health to know how heavy the
-# next session is likely to be) ---
+# --- Rejection flag (lets /health react to *actual* admission failures) ---
 #
-# Problem: ``EphysGuiView.__init__`` computes a per-dataset RAM estimate
-# (via the analyzer's unit_ids) and passes it to ``can_admit_new_session``.
-# But ``/health`` doesn't know the next session's size, so without help it
-# falls back to the static ``PER_SESSION_ESTIMATE_PCT`` (35%) — which can
-# be much smaller than reality on heavy recordings.
+# ``EphysGuiView.__init__`` rejects an incoming session when the
+# count-cap or RAM ceiling would be crossed. ``/health`` doesn't know
+# about that on its own — it would otherwise see "task at 30% RAM, 1
+# session, plenty of headroom for a 5 GB session, healthy" while in
+# reality the GUI just turned a 500-unit session away.
 #
-# Result: the GUI rejects a heavy incoming session ("would exceed safe
-# ceiling"), but ``/health`` says the task is healthy, so ECS doesn't
-# know to scale up.
-#
-# Fix: every time the GUI computes an estimate, record it here. ``/health``
-# reads the max-of-(static, recent-max) so its admission check tightens
-# as soon as a heavy session is observed. The recorded value decays
-# automatically after a few minutes so a one-off heavy session doesn't
-# permanently bias the health signal.
-_RECENT_MAX_ESTIMATE_PCT = 0.0
-_RECENT_MAX_ESTIMATE_TS = 0.0
-_RECENT_MAX_ESTIMATE_TTL = 300.0  # 5 minutes
+# Fix: the GUI sets a rejection timestamp here. ``/health`` reports the
+# task as full (and schedules inflate → ECS scale-up) when a recent
+# rejection has occurred, regardless of the static admission heuristic.
+# Decays automatically so a one-off rejection doesn't pin the task as
+# "always full" forever.
+_LAST_REJECTION_TS = 0.0
+_REJECTION_TTL = 60.0  # seconds — covers ~2 ALB /health polls
 
 
-def record_session_estimate(estimate_pct):
-    """Record a per-session RAM estimate observed by the GUI.
+def record_session_rejection():
+    """Mark that the GUI just turned away an incoming session.
 
-    The maximum seen in the last :data:`_RECENT_MAX_ESTIMATE_TTL` seconds
-    is what :func:`get_health_estimate_pct` reports. Called from
-    ``EphysGuiView.__init__`` for every admission attempt (admit or reject)
-    so ``/health`` learns the realistic upper bound of incoming sessions.
+    Called from ``EphysGuiView.__init__`` whenever admission rejects, for
+    any reason (count cap or RAM headroom). ``/health`` will report the
+    task as full for the next :data:`_REJECTION_TTL` seconds — long
+    enough to ensure ECS receives the scale-up signal via the inflate
+    code path on the next health-check tick.
     """
-    global _RECENT_MAX_ESTIMATE_PCT, _RECENT_MAX_ESTIMATE_TS
-    if estimate_pct is None or estimate_pct <= 0:
+    global _LAST_REJECTION_TS
+    _LAST_REJECTION_TS = _time.monotonic()
+
+
+def recent_session_rejection():
+    """Return True iff a rejection happened within :data:`_REJECTION_TTL`.
+
+    Used by ``/health`` to fire the inflate / scale-up signal only when
+    there has been concrete evidence of admission pressure — instead of
+    pre-emptively scaling on a hypothetical worst-case session estimate.
+    """
+    if _LAST_REJECTION_TS == 0.0:
+        return False
+    return (_time.monotonic() - _LAST_REJECTION_TS) < _REJECTION_TTL
+
+
+# --- Pending-load reservation (admission considers in-flight session loads) ---
+#
+# cgroup `memory.current` only reflects allocated RAM, not RAM that an
+# already-admitted session is *about* to allocate during its zarr/numpy
+# load. Three sessions admitted within 10 s of each other can each see
+# the same "current" RAM and individually pass the admission check —
+# only to OOM the task when all three finish loading.
+#
+# Fix: when admission succeeds, register the session's estimated RAM
+# percent here. Subsequent admission checks add the sum of pending
+# estimates to current RAM before deciding. Entries clear when the
+# session ends (via ``EphysGuiView.cleanup``) or after the TTL expires
+# (a safety net for sessions that crash before cleanup runs).
+_PENDING_LOADS = {}  # session_id -> (estimate_pct, timestamp)
+_PENDING_LOAD_TTL = 60.0  # seconds — covers typical heavy-session load time
+
+
+def record_pending_load(session_id, estimate_pct):
+    """Register that ``session_id`` will consume ~``estimate_pct``% RAM.
+
+    Called from ``EphysGuiView.__init__`` right after the admission check
+    succeeds. Replaces any existing entry for the same session_id.
+    """
+    if not session_id or estimate_pct is None or estimate_pct <= 0:
         return
-    now = _time.monotonic()
-    # Decay: if the last observation was a long time ago, reset before
-    # comparing — a stale max shouldn't keep biasing /health forever.
-    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
-        _RECENT_MAX_ESTIMATE_PCT = 0.0
-    if estimate_pct > _RECENT_MAX_ESTIMATE_PCT:
-        _RECENT_MAX_ESTIMATE_PCT = float(estimate_pct)
-        _RECENT_MAX_ESTIMATE_TS = now
+    _PENDING_LOADS[session_id] = (float(estimate_pct), _time.monotonic())
 
 
-def get_health_estimate_pct():
-    """Return the estimate ``/health`` should feed into ``can_admit_new_session``.
+def clear_pending_load(session_id):
+    """Remove the pending entry for ``session_id`` (called on cleanup)."""
+    if session_id:
+        _PENDING_LOADS.pop(session_id, None)
 
-    Takes ``max(static_fallback, recent_observed_max)``: in steady state
-    with light sessions this is just the static fallback, but a recent
-    heavy session pushes it up so ``/health`` correctly reports the task
-    as full / triggers the inflate scale-up signal.
+
+def get_pending_load_pct():
+    """Return the sum of pending session estimates, expiring stale entries.
+
+    Used by admission to project post-admit RAM as
+    ``current_used_pct + pending_load_pct + new_session_estimate_pct``.
+    Stale pending entries (older than :data:`_PENDING_LOAD_TTL`) are
+    pruned in-place — they presumably finished loading and their RAM is
+    now reflected in ``memory.current`` anyway.
     """
-    static = get_per_session_estimate_pct()
     now = _time.monotonic()
-    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
-        return static
-    return max(static, _RECENT_MAX_ESTIMATE_PCT)
+    expired = [sid for sid, (_, ts) in _PENDING_LOADS.items() if now - ts > _PENDING_LOAD_TTL]
+    for sid in expired:
+        del _PENDING_LOADS[sid]
+    return sum(pct for pct, _ in _PENDING_LOADS.values())
+
+
+# --- Admission cooldown (soft sequencing of near-simultaneous arrivals) ---
+#
+# Even with the pending-load registry, two sessions arriving within
+# ~1-2 s of each other can each pass admission before the *other's*
+# pending entry has been recorded. That's because each goes through
+# its own (~1-3 s) S3 metadata fetch concurrently, and the order of
+# (can_admit_new_session read) vs (record_pending_load write) is racy
+# across the two threads.
+#
+# Fix: serialize admissions with a short cooldown. After a successful
+# admission, the next arrival waits until the cooldown expires —
+# giving the prior session's record_pending_load() time to land. The
+# cooldown rejection is "soft": it does NOT call
+# :func:`record_session_rejection` (no /health inflate trigger),
+# because this isn't a real capacity rejection — just timing.
+_LAST_ADMISSION_TS = 0.0
+
+
+def get_admission_cooldown_s():
+    """Seconds to wait between successive admissions. Env-overridable."""
+    return float(os.environ.get("ADMISSION_COOLDOWN_S", "3.0"))
+
+
+def record_admission():
+    """Mark that an admission just succeeded; starts the cooldown clock."""
+    global _LAST_ADMISSION_TS
+    _LAST_ADMISSION_TS = _time.monotonic()
+
+
+def admission_cooldown_remaining():
+    """Return seconds remaining in the admission cooldown (0.0 if expired).
+
+    Callers in admission paths should soft-reject the session if this
+    returns > 0 — without signalling a /health rejection.
+    """
+    if _LAST_ADMISSION_TS == 0.0:
+        return 0.0
+    elapsed = _time.monotonic() - _LAST_ADMISSION_TS
+    cooldown = get_admission_cooldown_s()
+    if elapsed >= cooldown:
+        return 0.0
+    return cooldown - elapsed
 
 
 def get_max_number_of_gui_sessions():
