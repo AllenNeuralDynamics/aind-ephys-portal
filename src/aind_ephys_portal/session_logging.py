@@ -345,7 +345,7 @@ _LAST_ADMISSION_TS = 0.0
 
 def get_admission_cooldown_s():
     """Seconds to wait between successive admissions. Env-overridable."""
-    return float(os.environ.get("ADMISSION_COOLDOWN_S", "3.0"))
+    return float(os.environ.get("ADMISSION_COOLDOWN_S", "10.0"))
 
 
 def record_admission():
