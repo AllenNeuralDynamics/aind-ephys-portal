@@ -144,17 +144,97 @@ def get_container_used_memory():
     return psutil.virtual_memory().used
 
 
-def get_max_number_of_gui_sessions():
-    # Estimate number of sessions per worker for health check.
-    if "MAX_GUI_SESSIONS_PER_TASK" in os.environ:
-        print(f"Using MAX_GUI_SESSIONS_PER_TASK from environment: {os.environ['MAX_GUI_SESSIONS_PER_TASK']}")
-        MAX_SESSIONS_PER_WORKER = int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
-    else:
-        SESSION_AVG_RAM_USAGE_GB = 2
-        TOTAL_RAM_GB = get_container_total_memory() / (1024**3)
-        MAX_SESSIONS_PER_WORKER = int(np.floor(TOTAL_RAM_GB / SESSION_AVG_RAM_USAGE_GB))
+# --- Dynamic session admission ---
+#
+# The old static cap (`floor(total_ram / 6 GB)`) was too coarse:
+#   - It admits a 2nd heavy session on a task already at 60% RAM (→ OOM)
+#   - It rejects a 3rd light session on a task at 30% RAM (→ wasted capacity)
+#
+# New model: admit iff (current_used + per_session_estimate) < safe_max,
+# capped by an absolute session-count ceiling as a safety net. Each knob is
+# env-tunable so we can adjust without redeploys.
 
-    return MAX_SESSIONS_PER_WORKER
+
+def get_safe_max_ram_pct():
+    """Never voluntarily push RAM above this percent of container memory."""
+    return float(os.environ.get("SAFE_MAX_RAM_PCT", "75"))
+
+
+def get_per_session_estimate_pct():
+    """Fallback peak RAM cost of one session as a percent of container memory.
+
+    Used by ``can_admit_new_session()`` when the caller cannot supply a more
+    accurate per-session estimate (e.g., the analyzer pre-load failed).
+    The portal normally passes a *dynamic* estimate computed from the
+    analyzer's unit count — see :func:`estimate_session_ram_bytes`.
+    """
+    return float(os.environ.get("PER_SESSION_ESTIMATE_PCT", "35"))
+
+
+def get_hard_cap_sessions():
+    """Absolute ceiling on concurrent sessions per task.
+
+    Independent of RAM headroom — protects against estimate errors and from
+    operational issues (many Bokeh documents + periodic callbacks on one
+    process). Also lets the legacy ``MAX_GUI_SESSIONS_PER_TASK`` env var
+    keep working as an override.
+    """
+    if "MAX_GUI_SESSIONS_PER_TASK" in os.environ:
+        return int(os.environ["MAX_GUI_SESSIONS_PER_TASK"])
+    return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
+
+
+def estimate_session_ram_bytes(num_units, fast_mode=False):
+    """Estimate peak RAM cost of one GUI session for the given analyzer.
+
+    Empirical fit from production traces:
+      * full load (waveforms + PCA + templates + similarity): ~15 MB / unit
+      * fast_mode (skips waveforms + principal_components):  ~5 MB / unit
+      * plus a baseline ~250 MB (recording skeleton + Bokeh document
+        overhead + view widgets that don't scale with unit count)
+      * x1.2 safety multiplier to absorb variance
+
+    Returns bytes.
+    """
+    per_unit_mb = 5 if fast_mode else 15
+    base_mb = 250
+    safety = 1.2
+    estimated_mb = (base_mb + num_units * per_unit_mb) * safety
+    return int(estimated_mb * 1024 * 1024)
+
+
+def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
+    """Return True iff this task should accept one more session right now.
+
+    Predicts post-admit RAM as ``current_used + estimate_pct`` and rejects
+    if it would exceed ``SAFE_MAX_RAM_PCT`` or if the hard count cap is
+    already reached. ``estimate_pct`` is the per-session percent of
+    container memory; if ``None``, falls back to the static
+    :func:`get_per_session_estimate_pct`. Callers should pass a dynamic
+    value derived from :func:`estimate_session_ram_bytes` when possible —
+    a 100-unit session needs much less headroom than a 500-unit one, and
+    a fixed 35% over- or under-budgets both.
+    """
+    if current_count is None:
+        current_count = len(list_gui_sessions())
+    if current_count >= get_hard_cap_sessions():
+        return False
+    if used_pct is None:
+        used_pct = get_container_used_memory() / get_container_total_memory() * 100
+    if estimate_pct is None:
+        estimate_pct = get_per_session_estimate_pct()
+    projected = used_pct + estimate_pct
+    return projected < get_safe_max_ram_pct()
+
+
+def get_max_number_of_gui_sessions():
+    """Backward-compatible alias for :func:`get_hard_cap_sessions`.
+
+    Kept so existing imports and the ``--max-sessions`` CLI flag continue
+    to work. New code should prefer :func:`can_admit_new_session`, which
+    accounts for actual RAM headroom rather than a static count.
+    """
+    return get_hard_cap_sessions()
 
 
 class MultiSessionTee(io.TextIOBase):

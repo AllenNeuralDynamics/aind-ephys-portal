@@ -1,31 +1,60 @@
 import ctypes
 import json
+import os
 import psutil
 import param
 import time
 import gc
+import warnings
 from copy import deepcopy
 
 import panel as pn
 
 pn.extension("tabulator", "gridstack")
 
+# Silence sklearn's InconsistentVersionWarning during analyzer load. The
+# warning itself is informational, but some upstream code in the
+# spikeinterface / spikeinterface-gui stack constructs the warning class
+# with a positional arg, which crashes because its __init__ is kwarg-only
+# (`__init__() takes 1 positional argument but 2 were given`). Suppressing
+# the warning prevents any reactive code path that re-emits it from firing.
+# Belt-and-braces with the scikit-learn==1.8.0 pin in the Dockerfile, which
+# avoids the version mismatch in the common case but doesn't help when
+# loading older analyzers saved with sklearn < 1.8.0.
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+    warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+except ImportError:
+    pass
+
 
 from spikeinterface_gui import run_mainwindow
 
 import spikeinterface as si
 from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in_extractor_dict
+from spikeinterface.core.zarrextractors import super_zarr_open
 from spikeinterface.curation import validate_curation_dict
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     setup_logging,
     local_log_context,
-    get_max_number_of_gui_sessions,
+    can_admit_new_session,
+    estimate_session_ram_bytes,
+    get_hard_cap_sessions,
+    get_per_session_estimate_pct,
+    get_safe_max_ram_pct,
     list_gui_sessions,
     get_ecs_task_id,
+    get_container_total_memory,
+    get_container_used_memory,
     remove_session,
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
+
+# Admission is now decided dynamically by can_admit_new_session() in logging.py,
+# which predicts post-admit RAM and rejects above SAFE_MAX_RAM_PCT or beyond
+# HARD_CAP_SESSIONS. The old fixed MAX_RAM_PERCENT_FOR_NEW_SESSION constant has
+# been removed — it is subsumed by SAFE_MAX_RAM_PCT - PER_SESSION_ESTIMATE_PCT.
 
 displayed_unit_properties = [
     "decoder_label",
@@ -70,12 +99,59 @@ aind_layout = dict(
 )
 
 
+# Default OFF until we verify the refcount guard doesn't race with concurrent
+# sessions that may grab a cached fsspec FS microseconds after we check. Flip
+# via FSSPEC_DROP_INSTANCE_CACHE=1 once we have confidence.
+_FSSPEC_DROP_INSTANCE_CACHE = os.environ.get("FSSPEC_DROP_INSTANCE_CACHE", "0").lower() in ("1", "true", "yes")
+
+
 def _malloc_trim():
     """Force glibc to return freed memory to the OS (Linux only)."""
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except Exception:
         pass
+
+
+def _clear_fsspec_instance_caches():
+    """Drop cached fsspec filesystem instances and their internal block buffers.
+
+    fsspec keeps every filesystem ever constructed in AbstractFileSystem._cache,
+    so per-instance invalidate_cache() (dir listings) doesn't release the FS
+    itself or its dircache/block buffers. We only drop instances with no other
+    referrers to avoid stealing FS objects from concurrent sessions.
+    """
+    try:
+        import sys
+        from fsspec import AbstractFileSystem
+    except Exception:
+        return
+
+    cache = getattr(AbstractFileSystem, "_cache", None)
+    if not cache:
+        return
+
+    # 2 = the local var here + sys.getrefcount's own arg ref → no external holders.
+    # If anything else has a handle, leave it alone.
+    removed = 0
+    for key in list(cache.keys()):
+        fs = cache.get(key)
+        if fs is None:
+            continue
+        if sys.getrefcount(fs) <= 3:  # cache dict + local + getrefcount arg
+            try:
+                # Drop any caches the FS exposes before dropping the FS.
+                for attr in ("dircache", "_intrans", "_open_files"):
+                    try:
+                        getattr(fs, attr, {}).clear()
+                    except Exception:
+                        pass
+                del cache[key]
+                removed += 1
+            except Exception:
+                pass
+    if removed:
+        print(f"Dropped {removed} idle fsspec filesystem instance(s) from cache.")
 
 
 class EphysGuiView(param.Parameterized):
@@ -124,22 +200,69 @@ class EphysGuiView(param.Parameterized):
             sizing_mode="stretch_width",
         )
 
-        num_gui_sessions = len(list_gui_sessions())
-        max_sessions = get_max_number_of_gui_sessions()
-        if num_gui_sessions > max_sessions:
+        # `on_session_created` in setup.py runs *before* this constructor and has
+        # already added this session's log file to the count. So `list_gui_sessions()`
+        # returns ALL sessions including the one being admitted right now. Subtract 1
+        # to get the count of OTHER (already-active) sessions, which is what
+        # `can_admit_new_session()` expects ("how many sessions are already
+        # consuming a slot — can we fit one more on top of them?").
+        all_gui_sessions = len(list_gui_sessions())
+        existing_gui_sessions = max(0, all_gui_sessions - 1)
+        ram_percent = get_container_used_memory() / get_container_total_memory() * 100
+        total_ram_bytes = get_container_total_memory()
+
+        # Try to derive a *dataset-specific* RAM estimate by reading the unit counts
+        # unit count. This costs one S3 round-trip (~1-3s) but lets us accurately predict heavy
+        # sessions instead of relying on a fixed percent.
+        estimate_pct = None
+        num_units = None
+        if self.analyzer_path and self.analyzer_path.endswith((".zarr", ".zarr/")):
+            try:
+                root = super_zarr_open(self.analyzer_path)
+                num_units = len(root["sorting/unit_ids"])
+                est_bytes = estimate_session_ram_bytes(num_units, fast_mode=self.fast_mode)
+                estimate_pct = est_bytes / total_ram_bytes * 100
+                print(
+                    f"Dynamic per-session RAM estimate: "
+                    f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
+                    f"for {num_units} units, fast_mode={self.fast_mode}"
+                )
+            except Exception as e:
+                # Pre-load failed (S3 transient, bad path, etc.) — fall back
+                # to the static estimate. Better to occasionally reject a
+                # session we could have admitted than to OOM.
+                print(f"Could not pre-load # units for size estimate: {e}. Using static fallback.")
+
+        # Pass the count of OTHER existing sessions (not this one) so
+        # can_admit_new_session can answer "is there room for one more?".
+        if not can_admit_new_session(
+            current_count=existing_gui_sessions,
+            used_pct=ram_percent,
+            estimate_pct=estimate_pct,
+        ):
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
             session_id = getattr(doc, "_log_session_id", None)
             if route and session_id:
                 remove_session(route, session_id)
-            print(
-                f"Current number of GUI sessions: {num_gui_sessions}. Max allowed per worker: {max_sessions}. Task ID: {task_id}"
-            )
+            hard_cap = get_hard_cap_sessions()
+            safe_max = get_safe_max_ram_pct()
+            effective_estimate = estimate_pct if estimate_pct is not None else get_per_session_estimate_pct()
+            if existing_gui_sessions >= hard_cap:
+                reason = f"hard session cap reached ({existing_gui_sessions}/{hard_cap})"
+            else:
+                source = f"{num_units} units" if num_units is not None else "static fallback"
+                reason = (
+                    f"insufficient RAM headroom: current {ram_percent:.1f}% + "
+                    f"~{effective_estimate:.1f}% (estimated from {source}) would "
+                    f"exceed safe ceiling {safe_max:.0f}%"
+                )
+            print(f"Rejecting new session: {reason}. Task ID: {task_id}")
             self.layout = pn.Column(
                 header,
                 pn.pane.Markdown(
-                    f"⚠️ Too many active GUI sessions ({num_gui_sessions}). Max allowed per worker is {max_sessions}. "
+                    f"⚠️ Cannot start a new GUI session: {reason}. "
                     f"Please try again in a few minutes or open a new tab (Task ID: `{task_id}`).",
                     sizing_mode="stretch_both",
                 ),
@@ -314,6 +437,7 @@ class EphysGuiView(param.Parameterized):
     def _initialize_analyzer(self):
         if not self.analyzer_path.endswith((".zarr", ".zarr/")):
             raise ValueError("Only Zarr files are supported for now.")
+
         print(f"Loading analyzer...")
         self.analyzer = si.load(self.analyzer_path, load_extensions=False)
         print(f"Analyzer loaded: {self.analyzer}")
@@ -403,12 +527,63 @@ class EphysGuiView(param.Parameterized):
         if sigui_win is not None:
             controller = getattr(sigui_win, "controller", None)
             if controller is not None:
-                # Clear views list — each view has param watchers holding back-refs
+                # Break the SignalHandler ↔ Controller back-edge BEFORE we
+                # touch the views, so even partial failures still detach the
+                # graph from the controller.
+                signal_handler = getattr(controller, "signal_handler", None)
+                if signal_handler is not None:
+                    try:
+                        signal_handler.controller = None
+                    except Exception:
+                        pass
+
+                # Each view has TWO sets of param watchers, plus three back-refs
+                # to the controller graph that the gc cycle collector can't break
+                # because SignalHandler.controller is a strong external ref into
+                # the cycle. Break them all here:
+                #   - view.settings._parameterized watchers   (settings change → refresh)
+                #   - view.notifier watchers                  (signal handler → 8 bound methods)
+                #   - view.notifier.view = view               (direct cycle)
+                #   - view.controller = controller            (back-ref)
+                #   - view.tour_timer (ndscatterview only)    (pn.state.add_periodic_callback)
                 for view in list(getattr(controller, "views", [])):
                     try:
                         view.settings._parameterized.param.unwatch_all()
                     except Exception:
                         pass
+                    try:
+                        view.notifier.param.unwatch_all()
+                    except Exception:
+                        pass
+                    notifier = getattr(view, "notifier", None)
+                    if notifier is not None:
+                        try:
+                            notifier.view = None
+                        except Exception:
+                            pass
+                    try:
+                        view.notifier = None
+                    except Exception:
+                        pass
+                    try:
+                        view.controller = None
+                    except Exception:
+                        pass
+                    # Stop per-view periodic callbacks. Only ndscatterview's
+                    # "Random tour" registers one today, but list-driven so
+                    # adding new ones upstream doesn't silently leak.
+                    for cb_attr in ("tour_timer",):
+                        cb = getattr(view, cb_attr, None)
+                        if cb is not None:
+                            try:
+                                cb.stop()
+                            except Exception:
+                                pass
+                            try:
+                                setattr(view, cb_attr, None)
+                            except Exception:
+                                pass
+
                 controller.views = []
                 # Clear PanelMainWindow's view dicts too
                 sigui_win.views = {}
@@ -543,6 +718,9 @@ class EphysGuiView(param.Parameterized):
             def _deferred_gc():
                 gc.collect()
                 gc.collect()
+                if _FSSPEC_DROP_INSTANCE_CACHE:
+                    _clear_fsspec_instance_caches()
+                    gc.collect()
                 _malloc_trim()
                 final_mem = psutil.virtual_memory()
                 used = final_mem.used / (1024**3)
@@ -554,6 +732,9 @@ class EphysGuiView(param.Parameterized):
             # Fallback: run immediately if IOLoop is unavailable
             gc.collect()
             gc.collect()
+            if _FSSPEC_DROP_INSTANCE_CACHE:
+                _clear_fsspec_instance_caches()
+                gc.collect()
             _malloc_trim()
             final_mem = psutil.virtual_memory()
             used = final_mem.used / (1024**3)

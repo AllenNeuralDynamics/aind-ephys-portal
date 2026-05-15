@@ -1,7 +1,8 @@
 import psutil
+import pandas as pd
 import panel as pn
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     list_sessions,
     remove_session,
     get_container_total_memory,
@@ -9,7 +10,7 @@ from aind_ephys_portal.panel.logging import (
     get_ecs_task_id,
 )
 
-pn.extension()
+pn.extension("tabulator")
 
 
 # --- Memory info ---
@@ -223,6 +224,61 @@ pn.state.add_periodic_callback(refresh_log_tabs, period=2000)
 refresh_log_tabs()
 
 
+# --- Process table (htop-like) ---
+def get_process_table():
+    """Collect per-process info into a DataFrame."""
+    container_total = get_container_total_memory()
+    rows = []
+    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "status"]):
+        try:
+            info = proc.info
+            rss = proc.memory_info().rss
+            rss_gb = rss / (1024**3)
+            mem_pct = rss / container_total * 100 if container_total else 0.0
+            rows.append(
+                {
+                    "PID": info["pid"],
+                    "Name": info["name"] or "",
+                    "CPU %": round(info["cpu_percent"] or 0.0, 1),
+                    "RAM (GB)": round(rss_gb, 2),
+                    "Memory %": round(mem_pct, 1),
+                    "Status": info["status"] or "",
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    df = pd.DataFrame(rows, columns=["PID", "Name", "CPU %", "RAM (GB)", "Memory %", "Status"])
+    return df.sort_values("CPU %", ascending=False).reset_index(drop=True)
+
+
+task_tabulator = pn.widgets.Tabulator(
+    get_process_table(),
+    sizing_mode="stretch_both",
+    pagination="remote",
+    page_size=50,
+    theme="simple",
+    frozen_columns=["PID"],
+    sorters=[{"field": "CPU %", "dir": "desc"}],
+    min_height=600,
+)
+
+
+def refresh_process_table():
+    task_tabulator.value = get_process_table()
+
+
+pn.state.add_periodic_callback(refresh_process_table, period=2000)
+
+
+# --- Tabs: Session Logs + Tasks ---
+monitor_tabs = pn.Tabs(
+    ("Session Logs", log_container),
+    ("Tasks", task_tabulator),
+    sizing_mode="stretch_both",
+    dynamic=True,
+)
+
+
 # --- App layout ---
 task_id = get_ecs_task_id()
 app = pn.Column(
@@ -231,8 +287,7 @@ app = pn.Column(
     pn.Row(cpu_usage_label, cpu_monitor),
     pn.pane.Markdown("## Active Sessions"),
     sessions_summary,
-    pn.pane.Markdown("## Session Logs"),
-    log_container,
+    monitor_tabs,
     sizing_mode="stretch_both",
 )
 
