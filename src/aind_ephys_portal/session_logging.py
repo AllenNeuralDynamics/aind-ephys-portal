@@ -228,63 +228,46 @@ def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
     return projected < get_safe_max_ram_pct()
 
 
-# --- Recent-max-estimate tracking (used by /health to know how heavy the
-# next session is likely to be) ---
+# --- Rejection flag (lets /health react to *actual* admission failures) ---
 #
-# Problem: ``EphysGuiView.__init__`` computes a per-dataset RAM estimate
-# (via the analyzer's unit_ids) and passes it to ``can_admit_new_session``.
-# But ``/health`` doesn't know the next session's size, so without help it
-# falls back to the static ``PER_SESSION_ESTIMATE_PCT`` (35%) — which can
-# be much smaller than reality on heavy recordings.
+# ``EphysGuiView.__init__`` rejects an incoming session when the
+# count-cap or RAM ceiling would be crossed. ``/health`` doesn't know
+# about that on its own — it would otherwise see "task at 30% RAM, 1
+# session, plenty of headroom for a 5 GB session, healthy" while in
+# reality the GUI just turned a 500-unit session away.
 #
-# Result: the GUI rejects a heavy incoming session ("would exceed safe
-# ceiling"), but ``/health`` says the task is healthy, so ECS doesn't
-# know to scale up.
-#
-# Fix: every time the GUI computes an estimate, record it here. ``/health``
-# reads the max-of-(static, recent-max) so its admission check tightens
-# as soon as a heavy session is observed. The recorded value decays
-# automatically after a few minutes so a one-off heavy session doesn't
-# permanently bias the health signal.
-_RECENT_MAX_ESTIMATE_PCT = 0.0
-_RECENT_MAX_ESTIMATE_TS = 0.0
-_RECENT_MAX_ESTIMATE_TTL = 300.0  # 5 minutes
+# Fix: the GUI sets a rejection timestamp here. ``/health`` reports the
+# task as full (and schedules inflate → ECS scale-up) when a recent
+# rejection has occurred, regardless of the static admission heuristic.
+# Decays automatically so a one-off rejection doesn't pin the task as
+# "always full" forever.
+_LAST_REJECTION_TS = 0.0
+_REJECTION_TTL = 60.0  # seconds — covers ~2 ALB /health polls
 
 
-def record_session_estimate(estimate_pct):
-    """Record a per-session RAM estimate observed by the GUI.
+def record_session_rejection():
+    """Mark that the GUI just turned away an incoming session.
 
-    The maximum seen in the last :data:`_RECENT_MAX_ESTIMATE_TTL` seconds
-    is what :func:`get_health_estimate_pct` reports. Called from
-    ``EphysGuiView.__init__`` for every admission attempt (admit or reject)
-    so ``/health`` learns the realistic upper bound of incoming sessions.
+    Called from ``EphysGuiView.__init__`` whenever admission rejects, for
+    any reason (count cap or RAM headroom). ``/health`` will report the
+    task as full for the next :data:`_REJECTION_TTL` seconds — long
+    enough to ensure ECS receives the scale-up signal via the inflate
+    code path on the next health-check tick.
     """
-    global _RECENT_MAX_ESTIMATE_PCT, _RECENT_MAX_ESTIMATE_TS
-    if estimate_pct is None or estimate_pct <= 0:
-        return
-    now = _time.monotonic()
-    # Decay: if the last observation was a long time ago, reset before
-    # comparing — a stale max shouldn't keep biasing /health forever.
-    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
-        _RECENT_MAX_ESTIMATE_PCT = 0.0
-    if estimate_pct > _RECENT_MAX_ESTIMATE_PCT:
-        _RECENT_MAX_ESTIMATE_PCT = float(estimate_pct)
-        _RECENT_MAX_ESTIMATE_TS = now
+    global _LAST_REJECTION_TS
+    _LAST_REJECTION_TS = _time.monotonic()
 
 
-def get_health_estimate_pct():
-    """Return the estimate ``/health`` should feed into ``can_admit_new_session``.
+def recent_session_rejection():
+    """Return True iff a rejection happened within :data:`_REJECTION_TTL`.
 
-    Takes ``max(static_fallback, recent_observed_max)``: in steady state
-    with light sessions this is just the static fallback, but a recent
-    heavy session pushes it up so ``/health`` correctly reports the task
-    as full / triggers the inflate scale-up signal.
+    Used by ``/health`` to fire the inflate / scale-up signal only when
+    there has been concrete evidence of admission pressure — instead of
+    pre-emptively scaling on a hypothetical worst-case session estimate.
     """
-    static = get_per_session_estimate_pct()
-    now = _time.monotonic()
-    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
-        return static
-    return max(static, _RECENT_MAX_ESTIMATE_PCT)
+    if _LAST_REJECTION_TS == 0.0:
+        return False
+    return (_time.monotonic() - _LAST_REJECTION_TS) < _REJECTION_TTL
 
 
 def get_max_number_of_gui_sessions():
