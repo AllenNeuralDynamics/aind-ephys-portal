@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+import time as _time
 import contextvars
 from pathlib import Path
 import psutil
@@ -225,6 +226,65 @@ def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
         estimate_pct = get_per_session_estimate_pct()
     projected = used_pct + estimate_pct
     return projected < get_safe_max_ram_pct()
+
+
+# --- Recent-max-estimate tracking (used by /health to know how heavy the
+# next session is likely to be) ---
+#
+# Problem: ``EphysGuiView.__init__`` computes a per-dataset RAM estimate
+# (via the analyzer's unit_ids) and passes it to ``can_admit_new_session``.
+# But ``/health`` doesn't know the next session's size, so without help it
+# falls back to the static ``PER_SESSION_ESTIMATE_PCT`` (35%) — which can
+# be much smaller than reality on heavy recordings.
+#
+# Result: the GUI rejects a heavy incoming session ("would exceed safe
+# ceiling"), but ``/health`` says the task is healthy, so ECS doesn't
+# know to scale up.
+#
+# Fix: every time the GUI computes an estimate, record it here. ``/health``
+# reads the max-of-(static, recent-max) so its admission check tightens
+# as soon as a heavy session is observed. The recorded value decays
+# automatically after a few minutes so a one-off heavy session doesn't
+# permanently bias the health signal.
+_RECENT_MAX_ESTIMATE_PCT = 0.0
+_RECENT_MAX_ESTIMATE_TS = 0.0
+_RECENT_MAX_ESTIMATE_TTL = 300.0  # 5 minutes
+
+
+def record_session_estimate(estimate_pct):
+    """Record a per-session RAM estimate observed by the GUI.
+
+    The maximum seen in the last :data:`_RECENT_MAX_ESTIMATE_TTL` seconds
+    is what :func:`get_health_estimate_pct` reports. Called from
+    ``EphysGuiView.__init__`` for every admission attempt (admit or reject)
+    so ``/health`` learns the realistic upper bound of incoming sessions.
+    """
+    global _RECENT_MAX_ESTIMATE_PCT, _RECENT_MAX_ESTIMATE_TS
+    if estimate_pct is None or estimate_pct <= 0:
+        return
+    now = _time.monotonic()
+    # Decay: if the last observation was a long time ago, reset before
+    # comparing — a stale max shouldn't keep biasing /health forever.
+    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
+        _RECENT_MAX_ESTIMATE_PCT = 0.0
+    if estimate_pct > _RECENT_MAX_ESTIMATE_PCT:
+        _RECENT_MAX_ESTIMATE_PCT = float(estimate_pct)
+        _RECENT_MAX_ESTIMATE_TS = now
+
+
+def get_health_estimate_pct():
+    """Return the estimate ``/health`` should feed into ``can_admit_new_session``.
+
+    Takes ``max(static_fallback, recent_observed_max)``: in steady state
+    with light sessions this is just the static fallback, but a recent
+    heavy session pushes it up so ``/health`` correctly reports the task
+    as full / triggers the inflate scale-up signal.
+    """
+    static = get_per_session_estimate_pct()
+    now = _time.monotonic()
+    if now - _RECENT_MAX_ESTIMATE_TS > _RECENT_MAX_ESTIMATE_TTL:
+        return static
+    return max(static, _RECENT_MAX_ESTIMATE_PCT)
 
 
 def get_max_number_of_gui_sessions():

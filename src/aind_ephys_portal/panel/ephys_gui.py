@@ -47,6 +47,7 @@ from aind_ephys_portal.session_logging import (
     get_ecs_task_id,
     get_container_total_memory,
     get_container_used_memory,
+    record_session_estimate,
     remove_session,
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
@@ -227,6 +228,11 @@ class EphysGuiView(param.Parameterized):
                     f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
                     f"for {num_units} units, fast_mode={self.fast_mode}"
                 )
+                # Teach /health what the largest recent session looked like
+                # — its admission predicate uses this so it can fire the
+                # inflate signal when a *heavy* session arrives instead of
+                # relying on the static fallback percent.
+                record_session_estimate(estimate_pct)
             except Exception as e:
                 # Pre-load failed (S3 transient, bad path, etc.) — fall back
                 # to the static estimate. Better to occasionally reject a
