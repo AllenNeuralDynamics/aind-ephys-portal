@@ -125,8 +125,6 @@ class HealthHandler(RequestHandler):
 
         # "Operationally full" = at least one session AND can't fit another
         # without crossing the safe RAM ceiling or hitting the hard count cap.
-        # This unifies the old (count-based) and RAM-based busy paths into one
-        # predicate that's accurate for both light and heavy sessions.
         # We pass `get_health_estimate_pct()` so the predicate knows how large
         # incoming sessions tend to be on this task — without it, /health
         # would use the static fallback (35%) and miss the case where the
