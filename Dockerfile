@@ -43,4 +43,4 @@ ENV PYTHONUNBUFFERED=1
 ENV MALLOC_ARENA_MAX=2
 
 EXPOSE 8000
-ENTRYPOINT ["python", "entrypoint.py", "--address", "0.0.0.0", "--port", "8000", "--test"]
+ENTRYPOINT ["python", "entrypoint.py", "--address", "0.0.0.0", "--port", "8000"]
