@@ -1,6 +1,8 @@
 import panel as pn
 
-from aind_ephys_portal.panel.logging import add_session, remove_session, setup_logging
+from aind_ephys_portal.session_logging import add_session, remove_session, setup_logging
+from aind_ephys_portal.session_logging import list_gui_sessions
+from aind_ephys_portal.ecs_protection import protect_task, unprotect_task, is_protected
 
 setup_logging()
 
@@ -31,6 +33,10 @@ def on_session_created(session_context):
     add_session(route=route, session_id=session_id)
     print(f"[setup] Session created: {route}/{session_id}")
 
+    # Protect task from scale-in while GUI sessions are active
+    if route == "ephys_gui_app" and not is_protected():
+        protect_task()
+
 
 def on_session_destroyed(session_context):
     doc = session_context._document
@@ -42,6 +48,10 @@ def on_session_destroyed(session_context):
 
     remove_session(route=route, session_id=session_id)
     print(f"[setup] Session destroyed: {route}/{session_id}")
+
+    # Clear protection when the last GUI session ends
+    if route == "ephys_gui_app" and len(list_gui_sessions()) == 0:
+        unprotect_task()
 
 
 pn.state.on_session_created(on_session_created)

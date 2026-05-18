@@ -4,7 +4,7 @@ import urllib.parse
 
 import panel as pn
 
-from aind_ephys_portal.panel.logging import setup_logging
+from aind_ephys_portal.session_logging import setup_logging
 from aind_ephys_portal.panel.utils import EPHYSGUI_LINK_PREFIX
 
 pn.extension()

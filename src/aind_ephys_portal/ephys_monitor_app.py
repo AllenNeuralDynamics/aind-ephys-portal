@@ -2,7 +2,7 @@ import psutil
 import pandas as pd
 import panel as pn
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     list_sessions,
     remove_session,
     get_container_total_memory,

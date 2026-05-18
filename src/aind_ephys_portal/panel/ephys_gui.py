@@ -35,7 +35,7 @@ from spikeinterface.core.core_tools import extractor_dict_iterator, set_value_in
 from spikeinterface.core.zarrextractors import super_zarr_open
 from spikeinterface.curation import validate_curation_dict
 
-from aind_ephys_portal.panel.logging import (
+from aind_ephys_portal.session_logging import (
     setup_logging,
     local_log_context,
     can_admit_new_session,
@@ -47,6 +47,11 @@ from aind_ephys_portal.panel.logging import (
     get_ecs_task_id,
     get_container_total_memory,
     get_container_used_memory,
+    record_session_rejection,
+    record_pending_load,
+    clear_pending_load,
+    record_admission,
+    admission_cooldown_remaining,
     remove_session,
 )
 from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeHandler
@@ -211,6 +216,34 @@ class EphysGuiView(param.Parameterized):
         ram_percent = get_container_used_memory() / get_container_total_memory() * 100
         total_ram_bytes = get_container_total_memory()
 
+        # Admission cooldown: if another session was admitted within the
+        # last few seconds, soft-reject this one. The previous admission's
+        # pending-load entry needs a moment to register so concurrent
+        # admissions don't all read the same stale `used + pending` sum.
+        # NB: this is sequencing, not real capacity pressure — we do NOT
+        # call record_session_rejection() so /health doesn't inflate.
+        cooldown_remaining = admission_cooldown_remaining()
+        if cooldown_remaining > 0:
+            print(
+                f"Soft-rejecting (admission cooldown): {cooldown_remaining:.1f}s remaining. "
+                f"Task ID: {task_id}"
+            )
+            doc = pn.state.curdoc
+            route = getattr(doc, "_log_route", None)
+            session_id = getattr(doc, "_log_session_id", None)
+            if route and session_id:
+                remove_session(route, session_id)
+            self.layout = pn.Column(
+                header,
+                pn.pane.Markdown(
+                    f"⏱️ Another session is being admitted — please retry in "
+                    f"a few seconds. (Task: `{task_id}`)",
+                    sizing_mode="stretch_both",
+                ),
+                sizing_mode="stretch_both",
+            )
+            return
+
         # Try to derive a *dataset-specific* RAM estimate by reading the unit counts
         # unit count. This costs one S3 round-trip (~1-3s) but lets us accurately predict heavy
         # sessions instead of relying on a fixed percent.
@@ -227,6 +260,11 @@ class EphysGuiView(param.Parameterized):
                     f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
                     f"for {num_units} units, fast_mode={self.fast_mode}"
                 )
+                # Teach /health what the largest recent session looked like
+                # — its admission predicate uses this so it can fire the
+                # inflate signal when a *heavy* session arrives instead of
+                # relying on the static fallback percent.
+                record_session_estimate(estimate_pct)
             except Exception as e:
                 # Pre-load failed (S3 transient, bad path, etc.) — fall back
                 # to the static estimate. Better to occasionally reject a
@@ -240,6 +278,11 @@ class EphysGuiView(param.Parameterized):
             used_pct=ram_percent,
             estimate_pct=estimate_pct,
         ):
+            # Tell /health a rejection just happened so it can fire the
+            # inflate / scale-up signal on its next tick. Without this,
+            # /health would see the task's current RAM and think there's
+            # still room — even though admission just turned a session away.
+            record_session_rejection()
             # Remove this session from the count — it is being rejected
             doc = pn.state.curdoc
             route = getattr(doc, "_log_route", None)
@@ -269,6 +312,19 @@ class EphysGuiView(param.Parameterized):
                 sizing_mode="stretch_both",
             )
         elif self.analyzer_path != "":
+            # Admission succeeded — register this session's estimated RAM so
+            # later admission attempts (within the same ~10s loading window)
+            # see it as "pending" instead of reading a stale-low used_pct from
+            # cgroup. Falls back to the static estimate if the dynamic one
+            # could not be computed. The pending entry is cleared in cleanup()
+            # or expires after PENDING_LOAD_TTL (60s).
+            self._pending_session_id = getattr(pn.state.curdoc, "_log_session_id", None)
+            pending_pct = estimate_pct if estimate_pct is not None else get_per_session_estimate_pct()
+            record_pending_load(self._pending_session_id, pending_pct)
+            # Start the admission-cooldown clock so the next arrival waits
+            # for THIS pending-load entry to be visible.
+            record_admission()
+
             self.layout = pn.Column(
                 header,
                 self._create_main_window(),
@@ -516,6 +572,13 @@ class EphysGuiView(param.Parameterized):
         total_ram = initial_mem.total / (1024**3)
         current_ram_usage = initial_mem.used / (1024**3)
         print(f"\nRAM Usage before cleanup: {current_ram_usage:.2f} / {total_ram:.2f} GB\n")
+
+        # 0) Release this session's pending-load reservation so the next
+        # admission attempt sees accurate RAM headroom. (The actual cgroup
+        # `memory.current` won't drop until the deferred GC further down
+        # runs malloc_trim — but the pending entry was overestimating, so
+        # dropping it now lets other admissions proceed sooner.)
+        clear_pending_load(getattr(self, "_pending_session_id", None))
 
         # 1) Clear postMessage listeners and submit trigger (they hold bound-method back-refs to self)
         self.curation_listener = None
