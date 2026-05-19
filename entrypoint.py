@@ -34,7 +34,6 @@ from aind_ephys_portal.session_logging import (  # noqa: E402
     list_gui_sessions,
     get_max_number_of_gui_sessions,
     get_hard_cap_sessions,
-    get_health_estimate_pct,
     get_container_total_memory,
     get_container_used_memory,
     get_ecs_task_id,
