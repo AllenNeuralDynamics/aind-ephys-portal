@@ -205,7 +205,7 @@ def estimate_session_ram_bytes(num_units, fast_mode=False):
 
 
 def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
-    """Return True iff this task should accept one more session right now.
+    """Return True if this task should accept one more session right now.
 
     Predicts post-admit RAM as
     ``current_used + pending_load_pct + estimate_pct`` and rejects if it
@@ -264,7 +264,7 @@ def record_session_rejection():
 
 
 def recent_session_rejection():
-    """Return True iff a rejection happened within :data:`_REJECTION_TTL`.
+    """Return True if a rejection happened within :data:`_REJECTION_TTL`.
 
     Used by ``/health`` to fire the inflate / scale-up signal only when
     there has been concrete evidence of admission pressure — instead of
