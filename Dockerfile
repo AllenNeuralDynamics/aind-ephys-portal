@@ -28,7 +28,7 @@ RUN pip install spikeinterface==0.104.1
 
 # Install spikeinterface-gui form branch with AIND fixes
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
-    cd spikeinterface-gui && git checkout e98d515bb25c10a357c7eee3afb85e55d7afab67 && \
+    cd spikeinterface-gui && git checkout ee8971846ebef7c375ef6383d960276730710de0 && \
     pip install . && cd ..
 # RUN pip install spikeinterface-gui==0.13.1
 
