@@ -76,7 +76,7 @@ class EphysLauncher:
 
         analyzer_path_q = urllib.parse.quote(analyzer_path, safe="")
         recording_path_q = urllib.parse.quote(recording_path, safe="") if recording_path else ""
-        path = EPHYSGUI_LINK_PREFIX.format(analyzer_path_q, recording_path_q)
+        path = EPHYSGUI_LINK_PREFIX.format(analyzer_path_q, recording_path_q, "")  # use empty session for now
         if self.fast_mode_checkbox.value:
             path += "&fast_mode=true"
         if self.preload_curation.value:
