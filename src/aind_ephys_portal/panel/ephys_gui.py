@@ -6,6 +6,7 @@ import param
 import time
 import gc
 import warnings
+from pathlib import Path
 from copy import deepcopy
 
 import panel as pn
@@ -517,23 +518,47 @@ class EphysGuiView(param.Parameterized):
     def _create_main_window(self):
         if self.analyzer is not None:
             # prepare the curation data using decoder labels
+            curation_dict = None
             if self.preload_curation:
                 curation_dict = deepcopy(default_curation_dict)
                 curation_dict["unit_ids"] = self.analyzer.unit_ids
-                if "decoder_label" in self.analyzer.sorting.get_property_keys():
-                    decoder_labels = self.analyzer.get_sorting_property("decoder_label")
-                    noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
-                    curation_dict["removed"] = list(noise_units)
-                    for unit_id in noise_units:
-                        curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
 
-                try:
-                    validate_curation_dict(curation_dict)
-                except ValueError as e:
-                    print(f"Curated dictionary is invalid: {e}")
-                    curation_dict = None
-            else:
-                curation_dict = None
+                # Check the "curated" remote path for a curation dictionary and load it if available
+                curated_path = str(self.analyzer_path).replace(".zarr", "").replace("postprocessed", "curated")
+                curated_path = curated_path + "/curation.json"
+                print(f"Curated path: {curated_path}")
+                # Check if it exists on s3 and load it if available, otherwise check local path
+                if curated_path.startswith("s3://"):
+                    import boto3
+                    from botocore.exceptions import ClientError
+
+                    s3 = boto3.client("s3")
+                    bucket_name, key = curated_path[5:].split("/", 1)
+                    try:
+                        s3.head_object(Bucket=bucket_name, Key=key)
+                        obj = s3.get_object(Bucket=bucket_name, Key=key)
+                        curation_dict = json.loads(obj["Body"].read().decode("utf-8"))
+                        print(f"Loaded curation dictionary from S3: {curated_path}")
+                    except ClientError as e:
+                        print(f"Failed to load curation dictionary from S3: {curated_path}: {e}")
+
+                # Look for decoder_label
+                if curation_dict is None:
+                    if "decoder_label" in self.analyzer.sorting.get_property_keys():
+                        decoder_labels = self.analyzer.get_sorting_property("decoder_label")
+                        noise_units = self.analyzer.unit_ids[decoder_labels == "noise"]
+                        curation_dict["removed"] = list(noise_units)
+                        for unit_id in noise_units:
+                            curation_dict["manual_labels"].append({"unit_id": unit_id, "quality": ["noise"]})
+
+                if curation_dict is not None:
+                    try:
+                        validate_curation_dict(curation_dict)
+                    except ValueError as e:
+                        print(f"Curated dictionary is invalid: {e}")
+                        curation_dict = None
+                else:
+                    print("No curated dictionary found. Cannot preload curation.")
 
             if self.fast_mode:
                 skip_extensions = ["waveforms", "principal_components"]
