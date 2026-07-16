@@ -28,8 +28,8 @@ RUN pip install spikeinterface==0.104.7
 
 # Install spikeinterface-gui form branch with AIND fixes
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
-    cd spikeinterface-gui && git checkout 254d09836622bd17bf51fae00167ed6c7d0f6c37 && \
-    pip install . && cd ..
+    cd spikeinterface-gui && git checkout 7cfce1580b8ef5e205e1976c089641ca6b2d7130 && \
+    pip install . && cd .. 
 # RUN pip install spikeinterface-gui==0.13.1
 
 # Pin scikit-learn AFTER spikeinterface installs so we override whatever the

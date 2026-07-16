@@ -63,13 +63,15 @@ from aind_ephys_portal.panel.utils import PostMessageListener, FullscreenResizeH
 # been removed — it is subsumed by SAFE_MAX_RAM_PCT - PER_SESSION_ESTIMATE_PCT.
 
 displayed_unit_properties = [
-    "decoder_label",
+    "unitrefine_label",
+    "bombcell_label",
     "default_qc",
     "firing_rate",
     "y",
     "snr",
     "amplitude_median",
     "isi_violation_ratio",
+    "decoder_label"
 ]
 default_curation_dict = {
     "format_version": "2",
@@ -566,6 +568,11 @@ class EphysGuiView(param.Parameterized):
                 skip_extensions = None
 
             curation_callback = self._curation_callback if self.identifier is not None else None
+
+            # remove duplicated "unitrefine_label" entries if present
+            sorting_property_keys = self.analyzer.sorting.get_property_keys()
+            if "unitrefine_label" in sorting_property_keys and "decoder_label" in sorting_property_keys:
+                displayed_unit_properties.remove("decoder_label")
 
             win = run_mainwindow(
                 analyzer=self.analyzer,
