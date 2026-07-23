@@ -573,13 +573,14 @@ class EphysGuiView(param.Parameterized):
 
             # remove duplicated "unitrefine_label" entries if present
             sorting_property_keys = self.analyzer.sorting.get_property_keys()
+            local_displayed_unit_properties = list(displayed_unit_properties)
             if "unitrefine_label" in sorting_property_keys and "decoder_label" in sorting_property_keys:
-                displayed_unit_properties.remove("decoder_label")
+                local_displayed_unit_properties.remove("decoder_label")
 
             win = run_mainwindow(
                 analyzer=self.analyzer,
                 curation=True,
-                displayed_unit_properties=displayed_unit_properties,
+                displayed_unit_properties=local_displayed_unit_properties,
                 curation_dict=curation_dict,
                 mode="web",
                 start_app=False,
