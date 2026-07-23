@@ -41,6 +41,13 @@ class EphysLauncher:
             sizing_mode="stretch_width",
         )
 
+        self.lazy_checkbox = pn.widgets.Checkbox(
+            name="Enable Lazy Mode",
+            value=False,
+            height=30,
+            sizing_mode="stretch_width",
+        )
+
         self.preload_curation = pn.widgets.Checkbox(
             name="Preload Curation",
             value=True,
@@ -62,7 +69,7 @@ class EphysLauncher:
             pn.pane.Markdown("## AIND Ephys Launcher"),
             self.analyzer_input,
             self.recording_input,
-            pn.Row(self.generate_button, self.fast_mode_checkbox, self.preload_curation, sizing_mode="stretch_width"),
+            pn.Row(self.generate_button, self.fast_mode_checkbox, self.lazy_checkbox, self.preload_curation, sizing_mode="stretch_width"),
             self.link_pane,
             self.url_output,
             sizing_mode="stretch_width",
@@ -79,7 +86,9 @@ class EphysLauncher:
         path = EPHYSGUI_LINK_PREFIX.format(analyzer_path_q, recording_path_q, "")  # use empty session for now
         if self.fast_mode_checkbox.value:
             path += "&fast_mode=true"
-        if self.preload_curation.value:
+        if self.lazy_checkbox.value:
+            path += "&lazy=true"
+        if self.preload_curation.value and "&preload_curation=true" not in path:
             path += "&preload_curation=true"
 
         location = pn.state.location

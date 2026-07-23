@@ -34,6 +34,7 @@ class Settings(param.Parameterized):
         default=False, doc="Whether to enable fast mode (skips waveforms and principal components)"
     )
     preload_curation = param.Boolean(default=False, doc="Whether to preload existing curation from disk (if available)")
+    lazy = param.Boolean(default=False, doc="Whether to lazily load data (if applicable)")
     session = param.String(default=None, doc="Session name to display in header (optional)")
 
 
@@ -46,6 +47,7 @@ pn.state.location.sync(
         "identifier": "identifier",
         "fast_mode": "fast_mode",
         "preload_curation": "preload_curation",
+        "lazy": "lazy",
         "session": "session",
     },
 )
@@ -56,11 +58,13 @@ recording_path = urllib.parse.unquote(_get_arg("recording_path"))
 identifier = urllib.parse.unquote(_get_arg("identifier"))
 fast_mode = _get_arg("fast_mode", "false").lower() in ("true", "1", "yes")
 preload_curation = _get_arg("preload_curation", "false").lower() in ("true", "1", "yes")
+lazy = _get_arg("lazy", "false").lower() in ("true", "1", "yes")
 session = urllib.parse.unquote(_get_arg("session"))
 
 print(f"Parsed arguments:")
 print(
-    f"\tanalyzer_path={analyzer_path}\n\trecording_path={recording_path}\n\tidentifier={identifier}\n\tfast_mode={fast_mode}\n\tpreload_curation={preload_curation}\n\tsession={session}"
+    f"\tanalyzer_path={analyzer_path}\n\trecording_path={recording_path}\n\tidentifier={identifier}"
+    f"\n\tfast_mode={fast_mode}\n\tpreload_curation={preload_curation}\n\tsession={session}\n\tlazy={lazy}"
 )
 
 ephys_gui = EphysGuiView(
@@ -69,6 +73,7 @@ ephys_gui = EphysGuiView(
     identifier=identifier,
     fast_mode=fast_mode,
     preload_curation=preload_curation,
+    lazy=lazy,
     session=session,
 )
 
