@@ -23,14 +23,14 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
 # Install
 RUN pip install wavpack-numcodecs
 
-# Install spikeinterface DEV
-RUN git clone https://github.com/SpikeInterface/spikeinterface.git && \
-    cd spikeinterface && git checkout 4ce685455302ea99afb2ed0b798b39131d1cefb8 && \
+# Install spikeinterface DEV from lazy-loading branch
+RUN git clone https://github.com/alejoe91/spikeinterface.git && \
+    cd spikeinterface && git checkout 605e9af4ab8c0b1a0153f15ce89adc3c78359615 && \
     pip install . && cd ..
 
-# Install spikeinterface-gui form branch with AIND fixes
+# Install spikeinterface-gui from lazy-loading branch
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
-    cd spikeinterface-gui && git checkout 7cfce1580b8ef5e205e1976c089641ca6b2d7130 && \
+    cd spikeinterface-gui && git checkout a640f2656a07d9091f1f0755b2b8589b369ebe5d && \
     pip install . && cd .. 
 # RUN pip install spikeinterface-gui==0.13.1
 

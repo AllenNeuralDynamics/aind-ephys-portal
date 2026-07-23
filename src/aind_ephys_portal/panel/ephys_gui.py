@@ -171,6 +171,7 @@ class EphysGuiView(param.Parameterized):
         identifier=None,
         fast_mode=False,
         preload_curation=False,
+        lazy=False,
         session=None,
         **params,
     ):
@@ -186,6 +187,7 @@ class EphysGuiView(param.Parameterized):
         self.identifier = identifier
         self.fast_mode = fast_mode
         self.preload_curation = preload_curation
+        self.lazy = lazy
         self.analyzer = None
         self._init_cb = None
 
@@ -493,7 +495,7 @@ class EphysGuiView(param.Parameterized):
             raise ValueError("Only Zarr files are supported for now.")
 
         print(f"Loading analyzer...")
-        self.analyzer = si.load(self.analyzer_path, load_extensions=False)
+        self.analyzer = si.load(self.analyzer_path, lazy=self.lazy)
         print(f"Analyzer loaded: {self.analyzer}")
 
     def _set_processed_recording(self):
