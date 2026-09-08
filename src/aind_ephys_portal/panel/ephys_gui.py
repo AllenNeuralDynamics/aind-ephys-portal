@@ -106,6 +106,15 @@ aind_layout = dict(
     zone8=["correlogram", "metrics", "mainsettings"],
 )
 
+# Define custom user-settings for views
+user_settings = {
+    "spikeamplitude": {
+        "range_type": "absolute",
+        "range_min": -500,
+        "range_max": 200,
+    }
+}
+
 
 # Default OFF until we verify the refcount guard doesn't race with concurrent
 # sessions that may grab a cached fsspec FS microseconds after we check. Flip
@@ -589,6 +598,7 @@ class EphysGuiView(param.Parameterized):
                 layout=aind_layout,
                 skip_extensions=skip_extensions,
                 curation_callback=curation_callback,
+                user_settings=user_settings
             )
             self.sigui_win = win
             return win.main_layout
