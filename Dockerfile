@@ -30,7 +30,7 @@ RUN git clone https://github.com/alejoe91/spikeinterface.git && \
 
 # Install spikeinterface-gui from lazy-loading PR: #276
 RUN git clone https://github.com/alejoe91/spikeinterface-gui.git && \
-    cd spikeinterface-gui && git checkout d769d6bbf34a212d7d8f0522373c508409493ac6 && \
+    cd spikeinterface-gui && git checkout fd1180772d0fdd3dad2777cc0dd823e183f4935d && \
     pip install . && cd .. 
 # RUN pip install spikeinterface-gui==0.13.1
 
