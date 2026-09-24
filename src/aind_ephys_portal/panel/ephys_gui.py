@@ -112,6 +112,13 @@ user_settings = {
         "range_type": "absolute",
         "range_min": -500,
         "range_max": 200,
+        "cache_data": True
+    },
+    "spikedepths": {
+        "cache_data": True
+    },
+    "amplitudescalings": {
+        "cache_data": True
     }
 }
 
@@ -120,6 +127,19 @@ user_settings = {
 # sessions that may grab a cached fsspec FS microseconds after we check. Flip
 # via FSSPEC_DROP_INSTANCE_CACHE=1 once we have confidence.
 _FSSPEC_DROP_INSTANCE_CACHE = os.environ.get("FSSPEC_DROP_INSTANCE_CACHE", "0").lower() in ("1", "true", "yes")
+
+
+if os.environ.get("DEBUG_S3_READS", "0") == "1":
+    import traceback, zarr.storage as zs
+    _orig_get, _orig_getitems = zs.FSStore.__getitem__, zs.FSStore.getitems
+    def _caller():
+        fr = [f for f in traceback.extract_stack() if "spikeinterface_gui" in f.filename]
+        return f"{fr[-1].filename.split('/')[-1]}:{fr[-1].lineno}" if fr else "?"
+    def _get(self, key):
+        print(f"[S3] {key[-60:]} <- {_caller()}"); return _orig_get(self, key)
+    def _getitems(self, keys, **kw):
+        print(f"[S3] {len(keys)} chunks {keys[0][-50:]} <- {_caller()}"); return _orig_getitems(self, keys, **kw)
+    zs.FSStore.__getitem__, zs.FSStore.getitems = _get, _getitems
 
 
 def _malloc_trim():
@@ -267,12 +287,16 @@ class EphysGuiView(param.Parameterized):
             try:
                 root = super_zarr_open(self.analyzer_path)
                 num_units = len(root["sorting/unit_ids"])
-                est_bytes = estimate_session_ram_bytes(num_units, fast_mode=self.fast_mode)
+                skip_extensions = ["waveforms", "principal_components"] if self.fast_mode else None
+                est_bytes, est_breakdown = estimate_session_ram_bytes(
+                    root, lazy=self.lazy, skip_extensions=skip_extensions
+                )
                 estimate_pct = est_bytes / total_ram_bytes * 100
                 print(
                     f"Dynamic per-session RAM estimate: "
                     f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
-                    f"for {num_units} units, fast_mode={self.fast_mode}"
+                    f"for {num_units} units, fast_mode={self.fast_mode}, lazy={self.lazy}\n"
+                    f"\tbreakdown (MB, before x1.2 safety): {est_breakdown}"
                 )
             except Exception as e:
                 # Pre-load failed (S3 transient, bad path, etc.) — fall back

@@ -185,23 +185,107 @@ def get_hard_cap_sessions():
     return int(os.environ.get("HARD_CAP_SESSIONS", "4"))
 
 
-def estimate_session_ram_bytes(num_units, fast_mode=False):
-    """Estimate peak RAM cost of one GUI session for the given analyzer.
+# Coefficients of the RAM model below. Per-spike and fixed terms were fit with
+# tracemalloc on synthetic analyzers (0.5M and 2M spikes) around analyzer load +
+# Controller init + get_all_pcs(); predictions matched within ~2 MB.
+_BOKEH_BASE_MB = 250  # Bokeh document + view widgets (production fit, not re-measured)
+_FIXED_MB = 125  # analyzer + controller overhead independent of spike count
+_LAZY_BYTES_PER_SPIKE = 32  # sorting/spike-vector structures + per-unit spike index cache
+_NON_LAZY_BYTES_PER_SPIKE = 80  # in-memory spike vector (+ aligned copy) + index caches
+_SPIKE_LEVEL_EXTENSIONS = {
+    "spike_amplitudes": "amplitudes",
+    "amplitude_scalings": "amplitude_scalings",
+    "spike_locations": "spike_locations",
+}
+_SAFETY = 1.2
 
-    Empirical fit from production traces:
-      * full load (waveforms + PCA + templates + similarity): ~15 MB / unit
-      * fast_mode (skips waveforms + principal_components):  ~5 MB / unit
-      * plus a baseline ~250 MB (recording skeleton + Bokeh document
-        overhead + view widgets that don't scale with unit count)
-      * x1.2 safety multiplier to absorb variance
 
-    Returns bytes.
+def _array_nbytes(group, name):
+    if group is None or name not in group:
+        return 0
+    arr = group[name]
+    if not hasattr(arr, "dtype") or arr.dtype.kind == "O":
+        return 0
+    return int(np.prod(arr.shape)) * arr.dtype.itemsize
+
+
+def estimate_session_ram_bytes(zarr_root, lazy=False, skip_extensions=None):
+    """Estimate peak RAM cost of one GUI session from the analyzer zarr metadata.
+
+    Only shapes/dtypes are read (from the consolidated metadata), so no array
+    data is downloaded. The model mirrors what spikeinterface-gui keeps in memory:
+
+    * both modes: templates (average + std), correlograms, ISI, similarity, and
+      the dense PCA projections built by ``get_all_pcs()`` (random spikes x
+      components x all channels) unless principal_components is skipped
+    * lazy: a small per-spike cost plus the materialized spike depths; spike-level
+      extensions and waveforms stay remote. Scatter-view caching briefly loads
+      sample indices + one spike-level array (transient peak).
+    * non-lazy: ``si.load`` loads *every* saved extension array (skip_extensions
+      does not prevent it), and the controller holds copies of the spike-level
+      extensions returned by ``get_data()``.
+
+    Returns ``(bytes, breakdown)`` where ``breakdown`` maps component -> MB.
     """
-    per_unit_mb = 5 if fast_mode else 15
-    base_mb = 250
-    safety = 1.2
-    estimated_mb = (base_mb + num_units * per_unit_mb) * safety
-    return int(estimated_mb * 1024 * 1024)
+    skip = set(skip_extensions or [])
+    MB = 1024 * 1024
+    ext_root = zarr_root["extensions"] if "extensions" in zarr_root else {}
+
+    def ext(name):
+        return ext_root[name] if name in ext_root and name not in skip else None
+
+    num_spikes = zarr_root["sorting"]["spikes"]["sample_index"].shape[0]
+    breakdown = {"bokeh_base": _BOKEH_BASE_MB, "fixed": _FIXED_MB}
+
+    templates = ext_root["templates"] if "templates" in ext_root else None
+    breakdown["templates"] = (_array_nbytes(templates, "average") + _array_nbytes(templates, "std")) / MB
+    ccg = ext("correlograms")
+    breakdown["correlograms"] = (_array_nbytes(ccg, "ccgs") + _array_nbytes(ccg, "bins")) / MB
+    isi = ext("isi_histograms")
+    breakdown["isi_histograms"] = (_array_nbytes(isi, "isi_histograms") + _array_nbytes(isi, "bins")) / MB
+    breakdown["similarity"] = _array_nbytes(ext("template_similarity"), "similarity") / MB
+
+    pca = ext("principal_components")
+    if pca is not None and "pca_projection" in pca:
+        proj = pca["pca_projection"]
+        num_channels = zarr_root["sparsity_mask"].shape[1] if "sparsity_mask" in zarr_root else proj.shape[2]
+        breakdown["pca_dense"] = proj.shape[0] * proj.shape[1] * num_channels * proj.dtype.itemsize / MB
+
+    locations = ext("spike_locations")
+    if lazy:
+        spikes_mb = num_spikes * _LAZY_BYTES_PER_SPIKE / MB
+        if locations is not None and "spike_locations" in locations:
+            spikes_mb += num_spikes * locations["spike_locations"].dtype["y"].itemsize / MB
+        breakdown["spikes"] = spikes_mb
+        scatter_itemsizes = [
+            ext_root[e][a].dtype.itemsize
+            for e, a in _SPIKE_LEVEL_EXTENSIONS.items()
+            if e != "spike_locations" and ext(e) is not None and a in ext_root[e]
+        ]
+        transient_scatter = num_spikes * (8 + max(scatter_itemsizes, default=0)) / MB
+        transient_pca = _array_nbytes(pca, "pca_projection") / MB
+        breakdown["transient_peak"] = max(transient_scatter, transient_pca)
+    else:
+        breakdown["spikes"] = num_spikes * _NON_LAZY_BYTES_PER_SPIKE / MB
+        loaded = 0
+        for ext_name in ext_root.keys():
+            group = ext_root[ext_name]
+            loaded += sum(_array_nbytes(group, k) for k in group.keys())
+        # templates / correlograms / isi / similarity are the same objects as the loaded extensions
+        breakdown["loaded_extensions"] = (
+            loaded / MB
+            - breakdown["templates"]
+            - breakdown["correlograms"]
+            - breakdown["isi_histograms"]
+            - breakdown["similarity"]
+        )
+        breakdown["spike_extension_copies"] = sum(
+            _array_nbytes(ext(e), a) for e, a in _SPIKE_LEVEL_EXTENSIONS.items()
+        ) / MB
+
+    total_mb = sum(breakdown.values()) * _SAFETY
+    breakdown = {k: round(v, 1) for k, v in breakdown.items()}
+    return int(total_mb * MB), breakdown
 
 
 def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
