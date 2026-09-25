@@ -419,6 +419,16 @@ parser.add_argument(
     help="Run in test mode (connects to test API gateway)",
 )
 parser.add_argument(
+    "--debug-s3",
+    action="store_true",
+    help="Enable debug mode for S3 connections",
+)
+parser.add_argument(
+    "--no-cache",
+    action="store_true",
+    help="Disable caching for spike vectors",
+)
+parser.add_argument(
     "--max-sessions",
     type=int,
     default=None,
@@ -445,6 +455,14 @@ if __name__ == "__main__":
         os.environ["TEST_ENV"] = "1"
         # Lower threshold on test for easier testing
         os.environ["RECYCLE_RAM_PERCENT_WHEN_IDLE"] = "15"
+
+    if args.debug_s3:
+        print("Debug mode for S3 connections enabled")
+        os.environ["DEBUG_S3_READS"] = "1"
+
+    if args.no_cache:
+        print("Disabling caching for spike vectors")
+        os.environ["NO_CACHE_SPIKE_VECTORS"] = "1"
 
     print(f"Ephys Portal is running on http://{address}:{port}")
     for app in apps:
