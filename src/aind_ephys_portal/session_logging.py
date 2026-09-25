@@ -187,11 +187,12 @@ def get_hard_cap_sessions():
 
 # Coefficients of the RAM model below. Per-spike and fixed terms were fit with
 # tracemalloc on synthetic analyzers (0.5M and 2M spikes) around analyzer load +
-# Controller init + get_all_pcs(); predictions matched within ~2 MB.
+# Controller init + get_all_pcs(), then checked against process RSS for a full
+# run_mainwindow() on a remote 1252-unit / 24.7M-spike session (lazy and non-lazy).
 _BOKEH_BASE_MB = 250  # Bokeh document + view widgets (production fit, not re-measured)
 _FIXED_MB = 125  # analyzer + controller overhead independent of spike count
 _LAZY_BYTES_PER_SPIKE = 32  # sorting/spike-vector structures + per-unit spike index cache
-_NON_LAZY_BYTES_PER_SPIKE = 80  # in-memory spike vector (+ aligned copy) + index caches
+_NON_LAZY_BYTES_PER_SPIKE = 112  # sorting spike vector + aligned controller copy + index caches
 _SPIKE_LEVEL_EXTENSIONS = {
     "spike_amplitudes": "amplitudes",
     "amplitude_scalings": "amplitude_scalings",
@@ -209,24 +210,31 @@ def _array_nbytes(group, name):
     return int(np.prod(arr.shape)) * arr.dtype.itemsize
 
 
-def estimate_session_ram_bytes(zarr_root, lazy=False, skip_extensions=None):
+def estimate_session_ram_bytes(zarr_root, lazy=False, skip_extensions=None, max_gb_non_lazy=10):
     """Estimate peak RAM cost of one GUI session from the analyzer zarr metadata.
 
     Only shapes/dtypes are read (from the consolidated metadata), so no array
     data is downloaded. The model mirrors what spikeinterface-gui keeps in memory:
 
     * both modes: templates (average + std), correlograms, ISI, similarity, and
-      the dense PCA projections built by ``get_all_pcs()`` (random spikes x
-      components x all channels) unless principal_components is skipped
+      one dense PCA array built by ``get_all_pcs()`` (random spikes x all
+      channels x components, shared with the ND scatter view) unless
+      principal_components is skipped
     * lazy: a small per-spike cost plus the materialized spike depths; spike-level
       extensions and waveforms stay remote. Scatter-view caching briefly loads
       sample indices + one spike-level array (transient peak).
-    * non-lazy: ``si.load`` loads *every* saved extension array (skip_extensions
-      does not prevent it), and the controller holds copies of the spike-level
-      extensions returned by ``get_data()``.
+    * non-lazy: for a remote analyzer ``si.load`` loads extensions on first
+      access, and the controller then loads every array of the extensions it
+      uses (e.g. all template operators, full ``spike_locations``). The
+      controller and views hold these same objects, not copies. Waveforms are
+      never materialized.
 
-    Returns ``(bytes, breakdown)`` where ``breakdown`` maps component -> MB.
+    If the estimate is above the max_gb_non_lazy, it will be forced to be loaded
+    in lazy mode.
+
+    Returns ``(bytes, breakdown, force_lazy)`` where ``breakdown`` maps component -> MB.
     """
+    force_lazy = False
     skip = set(skip_extensions or [])
     MB = 1024 * 1024
     ext_root = zarr_root["extensions"] if "extensions" in zarr_root else {}
@@ -269,6 +277,8 @@ def estimate_session_ram_bytes(zarr_root, lazy=False, skip_extensions=None):
         breakdown["spikes"] = num_spikes * _NON_LAZY_BYTES_PER_SPIKE / MB
         loaded = 0
         for ext_name in ext_root.keys():
+            if ext_name == "waveforms" or ext_name in skip:
+                continue
             group = ext_root[ext_name]
             loaded += sum(_array_nbytes(group, k) for k in group.keys())
         # templates / correlograms / isi / similarity are the same objects as the loaded extensions
@@ -279,13 +289,12 @@ def estimate_session_ram_bytes(zarr_root, lazy=False, skip_extensions=None):
             - breakdown["isi_histograms"]
             - breakdown["similarity"]
         )
-        breakdown["spike_extension_copies"] = sum(
-            _array_nbytes(ext(e), a) for e, a in _SPIKE_LEVEL_EXTENSIONS.items()
-        ) / MB
 
     total_mb = sum(breakdown.values()) * _SAFETY
     breakdown = {k: round(v, 1) for k, v in breakdown.items()}
-    return int(total_mb * MB), breakdown
+    if total_mb > max_gb_non_lazy * 1024:
+        force_lazy = True
+    return int(total_mb * MB), breakdown, force_lazy
 
 
 def can_admit_new_session(current_count=None, used_pct=None, estimate_pct=None):
