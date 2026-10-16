@@ -1,29 +1,41 @@
 """
 Test Panel app for bidirectional postMessage communication with ephys_gui_app.
 
-Start the ephys_gui_app server on port 6000, then serve this file:
+Start the ephys_gui_app server on port 5006 (EPHYS_GUI_PORT), then serve this file:
 
+    python entrypoint.py --port 5006 --address localhost
     panel serve tests/test_bidirectional_communication.py --port 5007 --allow-websocket-origin="*"
 
-Each iframe loads the GUI with a different identifier (0000 / 0001).
+Sending (an empty box sends `{}`) should show the "Curation received externally" banner in the target iframe.
+
+Each iframe loads the GUI with a different identifier (0000, 0001, ...).
+Use `--args --num-iframes N` to set the number of iframes (default 1).
 The parent app can receive curation data from either iframe and send
 curation data back to a chosen iframe.
 """
 
+import argparse
 import json
 import datetime
+import sys
 
 import urllib.parse
 
 import panel as pn
+import spikeinterface as si
 from panel.custom import ReactComponent
 from panel.param import param
 
 pn.extension()
 
 EPHYS_GUI_PORT = 5006
-ANALYZER_PATH="s3://codeocean-s3datasetsbucket-1u41qdg42ur9/543979ee-17bd-41af-a504-e94a1de2ac40/postprocessed/experiment1_Record Node 104#Neuropix-PXI-100.ProbeA_recording1_group0.zarr"
-IDENTIFIERS = ["0000", "0001"]
+# ANALYZER_PATH="s3://codeocean-s3datasetsbucket-1u41qdg42ur9/543979ee-17bd-41af-a504-e94a1de2ac40/postprocessed/experiment1_Record Node 104#Neuropix-PXI-100.ProbeA_recording1_group0.zarr"
+ANALYZER_PATH="s3://aind-open-data/ecephys_796263_2025-09-19_13-39-47_sorted_2026-09-21_17-09-59/postprocessed/experiment1_Record Node 103#Neuropix-PXI-100.ProbeA_recording1_group0.zarr"
+# number of iframes, passed with `panel serve ... --args --num-iframes N`
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--num-iframes", type=int, default=1)
+NUM_IFRAMES = _parser.parse_known_args(sys.argv[1:])[0].num_iframes
+IDENTIFIERS = [f"{i:04d}" for i in range(NUM_IFRAMES)]
 
 
 # ── Receive: listen for "panel-data" messages coming from the iframes ────────
@@ -127,22 +139,19 @@ def iframe_url(identifier: str) -> str:
 
 # Iframes
 print("Loading iframes with URLs:")
-print(f"iframe-0000: {iframe_url('0000')}")
-print(f"iframe-0001: {iframe_url('0001')}")
-iframe_0000 = pn.pane.HTML(
-    f'<iframe id="iframe-0000" src="{iframe_url("0000")}" '
-    f'style="width:100%;height:100%;border:2px solid #2A7DE1;border-radius:6px;" '
-    f'allow="cross-origin-isolated"></iframe>',
-    height=600,
-    sizing_mode="stretch_width",
-)
-iframe_0001 = pn.pane.HTML(
-    f'<iframe id="iframe-0001" src="{iframe_url("0001")}" '
-    f'style="width:100%;height:100%;border:2px solid #1D8649;border-radius:6px;" '
-    f'allow="cross-origin-isolated"></iframe>',
-    height=600,
-    sizing_mode="stretch_width",
-)
+iframes = []
+for i, identifier in enumerate(IDENTIFIERS):
+    print(f"iframe-{identifier}: {iframe_url(identifier)}")
+    color = ["#2A7DE1", "#1D8649"][i % 2]
+    iframes.append(
+        pn.pane.HTML(
+            f'<iframe id="iframe-{identifier}" src="{iframe_url(identifier)}" '
+            f'style="width:100%;height:100%;border:2px solid {color};border-radius:6px;" '
+            f'allow="cross-origin-isolated"></iframe>',
+            height=600,
+            sizing_mode="stretch_width",
+        )
+    )
 
 # Received-messages log
 received_log = pn.widgets.TextAreaInput(
@@ -180,9 +189,14 @@ target_select = pn.widgets.Select(
     width=160,
 )
 
+# Sample curation removing the first 3 units: send it while the iframe is loading
+# to test that the curation is applied once the GUI is ready.
+_unit_ids = si.load(ANALYZER_PATH, load_extensions=False).unit_ids
+SAMPLE_CURATION = {"format_version": "2", "removed": _unit_ids[:3].tolist()}
+
 send_textarea = pn.widgets.TextAreaInput(
     name="✏️  Curation data to send (JSON)",
-    value="",
+    value=json.dumps(SAMPLE_CURATION, indent=2),
     sizing_mode="stretch_both",
     min_height=200,
     max_length=500000,
@@ -238,8 +252,7 @@ header = pn.pane.Markdown(
 )
 
 iframes_row = pn.Tabs(
-    ("### iframe 0000", iframe_0000),
-    ("### iframe 0001", iframe_0001),
+    *[(f"### iframe {identifier}", iframe) for identifier, iframe in zip(IDENTIFIERS, iframes)],
     sizing_mode="stretch_both",
 )
 

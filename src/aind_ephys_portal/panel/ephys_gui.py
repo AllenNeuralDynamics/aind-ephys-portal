@@ -221,6 +221,7 @@ class EphysGuiView(param.Parameterized):
         self.lazy = lazy
         self.analyzer = None
         self._init_cb = None
+        self._pending_curation = None
 
         self.spinner = pn.indicators.LoadingSpinner(value=True, sizing_mode="stretch_width")
         self.log_output = pn.widgets.TextAreaInput(value="", sizing_mode="stretch_both")
@@ -368,6 +369,11 @@ class EphysGuiView(param.Parameterized):
                 self._create_main_window(),
                 sizing_mode="stretch_both",
             )
+            if self.identifier is not None:
+                # created before loading so curations sent while the GUI loads are not lost
+                self.curation_banner = pn.Row(visible=False, sizing_mode="stretch_width")
+                self.curation_listener = self.create_post_message_listener()
+                self.layout.append(self.curation_listener)
 
             def delayed_init():
                 self._initialize()
@@ -452,7 +458,29 @@ class EphysGuiView(param.Parameterized):
         if not isinstance(curation_data, dict):
             print("Invalid curation_data type:", type(curation_data), curation_data)
             return
+        if getattr(self, "sigui_win", None) is None:
+            print("GUI not loaded yet: curation will be applied once loading is done.")
+            self._pending_curation = curation_data
+            return
         self.sigui_win.set_external_curation(curation_data)
+        self._show_curation_banner(f"Curation received externally and loaded ({time.strftime('%H:%M:%S')}).")
+
+    def _show_curation_banner(self, msg):
+        close_button = pn.widgets.Button(name="Close", button_type="primary", width=100, height=30)
+        close_button.on_click(lambda event: setattr(self.curation_banner, "visible", False))
+        alert = pn.pane.Alert(
+            msg,
+            alert_type="info",
+            width=500,
+            height=30,
+            stylesheets=[
+                ":host(.alert) { padding-top: 0; padding-bottom: 0; }",
+                # shortcut: line-height = height - 2px border centers a single line only, upgrade if messages wrap
+                "p { margin: 0; line-height: 48px; text-align: center; }",
+            ],
+        )
+        self.curation_banner[:] = [alert, close_button]
+        self.curation_banner.visible = True
 
     @staticmethod
     def _get_analyzer_stream_name(analyzer_path):
@@ -493,16 +521,21 @@ class EphysGuiView(param.Parameterized):
                         print(f"\nSetting up bi-directional communication with identifier: {self.identifier}")
                         # Add custom curation callback to send data to parent window
                         self.submit_trigger = self.create_submit_trigger()
-                        # Add postMessage listener to receive data from parent window
-                        self.curation_listener = self.create_post_message_listener()
                         self.fullscreen_listener = self.create_fullscreen_resize_listener()
 
                     self.win_layout = self._create_main_window()
-                    self.layout[1] = self.win_layout
                     if self.identifier is not None:
+                        self.layout[1] = pn.Column(self.curation_banner, self.win_layout, sizing_mode="stretch_both")
                         self.layout.append(self.submit_trigger)
-                        self.layout.append(self.curation_listener)
                         self.layout.append(self.fullscreen_listener)
+                        if self._pending_curation is not None:
+                            self.sigui_win.set_external_curation(self._pending_curation)
+                            self._pending_curation = None
+                            self._show_curation_banner(
+                                f"Curation received externally while loading and applied ({time.strftime('%H:%M:%S')})."
+                            )
+                    else:
+                        self.layout[1] = self.win_layout
 
                     print("\nEphys GUI initialized successfully!")
                     t_stop = time.perf_counter()
