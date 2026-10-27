@@ -5,7 +5,7 @@ import urllib.parse
 import panel as pn
 
 from aind_ephys_portal.session_logging import setup_logging
-from aind_ephys_portal.panel.utils import EPHYSGUI_LINK_PREFIX
+from aind_ephys_portal.panel.utils import EPHYSGUI_LINK_PREFIX, make_absolute_url
 
 pn.extension()
 
@@ -91,22 +91,7 @@ class EphysLauncher:
         if self.preload_curation.value and "&preload_curation=true" not in path:
             path += "&preload_curation=true"
 
-        location = pn.state.location
-        if location is not None:
-            href = getattr(location, "href", None)
-            if href:
-                parsed = urllib.parse.urlparse(href)
-                if parsed.scheme and parsed.netloc:
-                    return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-            protocol = getattr(location, "protocol", "")
-            hostname = getattr(location, "hostname", "")
-            port = getattr(location, "port", "")
-            if protocol and hostname:
-                netloc = f"{hostname}:{port}" if port else hostname
-                return f"{protocol}//{netloc}{path}"
-
-        return path
+        return make_absolute_url(path)
 
     def _update_link(self, event=None):
         url = self._build_gui_url()

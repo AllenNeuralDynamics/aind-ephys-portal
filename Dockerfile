@@ -23,8 +23,9 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
 # Install
 RUN pip install wavpack-numcodecs
 
-# Install spikeinterface from #4806
-RUN pip install spikeinterface==0.105.2 spikeinterface-gui==0.14.0 probeinterface==0.4.2
+RUN pip install spikeinterface==0.105.2
+
+RUN pip install git+https://github.com/alejoe91/spikeinterface-gui.git@85549c917dbcf822bd364c2574a7ec67c9d8a946
 
 # Pin scikit-learn AFTER spikeinterface installs so we override whatever the
 # transitive resolver picked. Match the version that analyzers in our pipeline

@@ -82,9 +82,13 @@ def list_sessions(skip_routes=None):
     return sessions
 
 
+# the routes that load analyzers: they count for admission, health and scale-in protection
+GUI_ROUTES = ("ephys_gui_app", "ephys_comparison_gui_app")
+
+
 def list_gui_sessions():
     """Helper to list only GUI sessions."""
-    return {k: v for k, v in list_sessions().items() if k[0] == "ephys_gui_app"}
+    return {k: v for k, v in list_sessions().items() if k[0] in GUI_ROUTES}
 
 
 def get_ecs_task_id():

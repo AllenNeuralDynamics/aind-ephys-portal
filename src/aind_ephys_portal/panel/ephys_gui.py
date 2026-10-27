@@ -234,8 +234,7 @@ class EphysGuiView(param.Parameterized):
         if session is not None:
             session_name = session
             header_str += f"**{session_name}** / "
-        stream_name = self._get_analyzer_stream_name(self.analyzer_path)
-        header_str += f"**{stream_name}**"
+        header_str += f"**{self._get_header_name()}**"
         header_str += f" / `{task_id}`"
         header = pn.pane.Markdown(
             header_str,
@@ -281,34 +280,7 @@ class EphysGuiView(param.Parameterized):
             )
             return
 
-        # Try to derive a *dataset-specific* RAM estimate by reading the unit counts
-        # unit count. This costs one S3 round-trip (~1-3s) but lets us accurately predict heavy
-        # sessions instead of relying on a fixed percent.
-        estimate_pct = None
-        num_units = None
-        if self.analyzer_path and self.analyzer_path.endswith((".zarr", ".zarr/")):
-            try:
-                root = super_zarr_open(self.analyzer_path)
-                num_units = len(root["sorting/unit_ids"])
-                skip_extensions = ["waveforms", "principal_components"] if self.fast_mode else None
-                est_bytes, est_breakdown, force_lazy = estimate_session_ram_bytes(
-                    root, lazy=self.lazy, skip_extensions=skip_extensions
-                )
-                estimate_pct = est_bytes / total_ram_bytes * 100
-                print(
-                    f"Dynamic per-session RAM estimate: "
-                    f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
-                    f"for {num_units} units, fast_mode={self.fast_mode}, lazy={self.lazy}, force_lazy={force_lazy}\n"
-                    f"\tbreakdown (MB, before x1.2 safety): {est_breakdown}"
-                )
-                if force_lazy:
-                    print("Forcing lazy loading due to high estimated RAM usage.")
-                    self.lazy = True
-            except Exception as e:
-                # Pre-load failed (S3 transient, bad path, etc.) — fall back
-                # to the static estimate. Better to occasionally reject a
-                # session we could have admitted than to OOM.
-                print(f"Could not pre-load # units for size estimate: {e}. Using static fallback.")
+        estimate_pct, num_units = self._estimate_session_ram(total_ram_bytes)
 
         # Pass the count of OTHER existing sessions (not this one) so
         # can_admit_new_session can answer "is there room for one more?".
@@ -386,6 +358,41 @@ class EphysGuiView(param.Parameterized):
                 pn.pane.Markdown(help_txt, sizing_mode="stretch_both"),
                 sizing_mode="stretch_both",
             )
+
+    def _get_header_name(self):
+        return self._get_analyzer_stream_name(self.analyzer_path)
+
+    def _estimate_session_ram(self, total_ram_bytes):
+        """Returns (estimate_pct, num_units), both None when the estimate could not be made"""
+        # Try to derive a *dataset-specific* RAM estimate by reading the unit counts
+        # unit count. This costs one S3 round-trip (~1-3s) but lets us accurately predict heavy
+        # sessions instead of relying on a fixed percent.
+        estimate_pct = None
+        num_units = None
+        if self.analyzer_path and self.analyzer_path.endswith((".zarr", ".zarr/")):
+            try:
+                root = super_zarr_open(self.analyzer_path)
+                num_units = len(root["sorting/unit_ids"])
+                skip_extensions = ["waveforms", "principal_components"] if self.fast_mode else None
+                est_bytes, est_breakdown, force_lazy = estimate_session_ram_bytes(
+                    root, lazy=self.lazy, skip_extensions=skip_extensions
+                )
+                estimate_pct = est_bytes / total_ram_bytes * 100
+                print(
+                    f"Dynamic per-session RAM estimate: "
+                    f"{est_bytes / (1024**3):.2f} GB ({estimate_pct:.1f}%) "
+                    f"for {num_units} units, fast_mode={self.fast_mode}, lazy={self.lazy}, force_lazy={force_lazy}\n"
+                    f"\tbreakdown (MB, before x1.2 safety): {est_breakdown}"
+                )
+                if force_lazy:
+                    print("Forcing lazy loading due to high estimated RAM usage.")
+                    self.lazy = True
+            except Exception as e:
+                # Pre-load failed (S3 transient, bad path, etc.) — fall back
+                # to the static estimate. Better to occasionally reject a
+                # session we could have admitted than to OOM.
+                print(f"Could not pre-load # units for size estimate: {e}. Using static fallback.")
+        return estimate_pct, num_units
 
     def create_fullscreen_resize_listener(self):
         return FullscreenResizeHandler()
