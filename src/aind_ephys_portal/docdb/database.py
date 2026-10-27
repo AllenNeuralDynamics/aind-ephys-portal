@@ -1,6 +1,7 @@
 """Database access functions for the AIND SIGUI Portal."""
 
 import os
+import re
 from typing import List, Dict, Any
 
 import panel as pn
@@ -132,17 +133,17 @@ def get_all_ecephys_derived(
         ],
         "data_description.data_level": "derived",
     }
-    client = client_v1 if version == "v1" else client_v2
-    responses = client.retrieve_docdb_records(
-        filter_query=filter_query,
-    )
-    responses_filt = []
     if additional_includes_in_name:
-        additional_fields = [field.strip() for field in additional_includes_in_name.split(",")]
-        for record in responses:
-            for field in additional_fields:
-                if field in record["name"]:
-                    responses_filt.append(record)
-    else:
-        responses_filt = responses
-    return responses_filt
+        additional_fields = [re.escape(field.strip()) for field in additional_includes_in_name.split(",")]
+        filter_query["name"] = {"$regex": "|".join(additional_fields)}
+    # only fetch the fields SearchOptions uses: full documents make the API paginate into many requests
+    projection = {
+        "name": 1,
+        "_created": 1,
+        "created": 1,
+        "location": 1,
+        "subject.subject_id": 1,
+        "subject_id": 1,
+    }
+    client = client_v1 if version == "v1" else client_v2
+    return client.retrieve_docdb_records(filter_query=filter_query, projection=projection)
