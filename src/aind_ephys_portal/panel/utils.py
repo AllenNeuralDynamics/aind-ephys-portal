@@ -4,6 +4,7 @@ from panel.param import param
 from panel.custom import ReactComponent
 
 EPHYSGUI_LINK_PREFIX = "/ephys_gui_app?analyzer_path={}&recording_path={}&session={}&preload_curation=true"
+EPHYSCOMPARISON_LINK_PREFIX = "/ephys_comparison_gui_app"
 
 
 AIND_COLORS = colors = {
@@ -35,6 +36,28 @@ def format_link(link: str, text: str = "link"):
         by default "link"
     """
     return f'<a href="{link}" target="_blank">{text}</a>'
+
+
+def make_absolute_url(path: str):
+    """Prefix a path with the scheme and host of the current page, when they are known"""
+    import urllib.parse
+
+    location = pn.state.location
+    if location is not None:
+        href = getattr(location, "href", None)
+        if href:
+            parsed = urllib.parse.urlparse(href)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+        protocol = getattr(location, "protocol", "")
+        hostname = getattr(location, "hostname", "")
+        port = getattr(location, "port", "")
+        if protocol and hostname:
+            netloc = f"{hostname}:{port}" if port else hostname
+            return f"{protocol}//{netloc}{path}"
+
+    return path
 
 
 def format_css_background():

@@ -402,6 +402,8 @@ apps = {
     "ephys_portal_app": os.path.join(APP_DIR, "ephys_portal_app.py"),
     "ephys_gui_app": os.path.join(APP_DIR, "ephys_gui_app.py"),
     "ephys_launcher_app": os.path.join(APP_DIR, "ephys_launcher_app.py"),
+    "ephys_comparison_gui_app": os.path.join(APP_DIR, "ephys_comparison_gui_app.py"),
+    "ephys_comparison_launcher_app": os.path.join(APP_DIR, "ephys_comparison_launcher_app.py"),
     "ephys_monitor_app": os.path.join(APP_DIR, "ephys_monitor_app.py"),
 }
 
