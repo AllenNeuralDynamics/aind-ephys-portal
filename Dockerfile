@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -21,9 +21,9 @@ RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
     ./configure && make install && cd ..
 
 # Install
-RUN pip install wavpack-numcodecs
+RUN pip install wavpack-numcodecs==0.3.0
 
-RUN pip install spikeinterface==0.105.2
+RUN pip install spikeinterface==0.105.4
 
 RUN pip install git+https://github.com/alejoe91/spikeinterface-gui.git@85549c917dbcf822bd364c2574a7ec67c9d8a946
 
@@ -34,11 +34,16 @@ RUN pip install git+https://github.com/alejoe91/spikeinterface-gui.git@85549c917
 # crashes session init (TypeError: __init__() takes 1 positional argument but 2).
 RUN pip install scikit-learn==1.8.0
 
+# panel 1.10 / bokeh 3.10 break rendering (DeserializationError: reference isn't known)
+RUN pip install panel==1.9.4 bokeh==3.9.2
+
 ENV PYTHONUNBUFFERED=1
 # Limit glibc malloc arenas to reduce per-thread heap fragmentation.
 # Default is 8 * NCPU; with numpy/zarr large alloc + free patterns this
 # leaves freed pages stranded across many arenas, inflating RSS.
 ENV MALLOC_ARENA_MAX=2
+ENV NUMCODECS_ALLOW_UNSAFE_PICKLE_DECODE=1
+
 
 EXPOSE 8000
 ENTRYPOINT ["python", "entrypoint.py", "--address", "0.0.0.0", "--port", "8000"]
