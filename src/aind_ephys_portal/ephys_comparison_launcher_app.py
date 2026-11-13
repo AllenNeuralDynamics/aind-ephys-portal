@@ -1,5 +1,6 @@
 """Standalone launcher page to generate comparison GUI links."""
 
+import os
 import re
 import urllib.parse
 
@@ -85,6 +86,10 @@ class EphysComparisonLauncher:
         ):
             if widget.value.strip():
                 query[key] = widget.value.strip()
+        # header label: common part of the two session names + stream name
+        name1, name2 = (b.rstrip("/").rsplit("/", 1)[-1] for b in (base1, base2))
+        common = os.path.commonprefix([name1, name2]).rstrip("_-. ").removesuffix("_sorted")
+        query["session"] = " / ".join(filter(None, [common, stream.removesuffix(".zarr")]))
         if self.fast_mode_checkbox.value:
             query["fast_mode"] = "true"
         return f"{EPHYSCOMPARISON_LINK_PREFIX}?{urllib.parse.urlencode(query, quote_via=urllib.parse.quote, safe='')}"
