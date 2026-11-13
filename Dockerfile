@@ -13,19 +13,8 @@ RUN apt install -y git build-essential nodejs npm
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install .
 
-# Install wavpack
-ENV WAVPACK_VERSION=5.7.0
-RUN apt install -y wget
-RUN wget "https://www.wavpack.com/wavpack-${WAVPACK_VERSION}.tar.bz2" && \
-    tar -xf wavpack-$WAVPACK_VERSION.tar.bz2 && cd wavpack-$WAVPACK_VERSION && \
-    ./configure && make install && cd ..
-
 # Install
-RUN pip install wavpack-numcodecs==0.3.0
-
-RUN pip install spikeinterface==0.105.4
-
-RUN pip install --force-reinstall --no-deps git+https://github.com/alejoe91/spikeinterface-gui.git@e7fe163a43f922e88a859f85b428175c653c4392
+RUN pip install spikeinterface==0.105.4 spikeinterface-gui==0.15.0 wavpack-numcodecs==0.3.2
 
 # Pin scikit-learn AFTER spikeinterface installs so we override whatever the
 # transitive resolver picked. Match the version that analyzers in our pipeline
